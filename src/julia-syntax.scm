@@ -231,7 +231,7 @@
   (let ((type-ex (caddr m)))
     (if (eq? (car type-ex) 'block)
         ;; extract ssavalue labels of sparams from the svec-of-sparams argument to `method`
-        (let ((sp-ssavals (cddr (last (last type-ex)))))
+        (let ((sp-ssavals (cddr (cadddr (last type-ex)))))
           (map (lambda (a)  ;; extract T from (= v (call (core TypeVar) (quote T) ...))
                  (cadr (caddr (caddr a))))
                (filter (lambda (e)
@@ -356,7 +356,11 @@
             (renames (map cons names temps))
             (mdef
              (if (null? sparams)
-                 `(method ,name (call (core svec) (call (core svec) ,@(dots->vararg types)) (call (core svec)))
+                 `(method ,name
+                          (call (core svec)
+                                (call (core svec) ,@(dots->vararg types))
+                                (call (core svec))
+                                (inert ,*current-desugar-loc*))
                           ,body)
                  `(method ,name
                           (block
@@ -377,7 +381,8 @@
                                                       (map (lambda (ty)
                                                              (replace-vars ty renames))
                                                            types)))
-                                 (call (core svec) ,@temps)))
+                                 (call (core svec) ,@temps)
+                                 (inert ,*current-desugar-loc*)))
                           ,body))))
        (if (or (symbol? name) (globalref? name))
            `(block ,@generator (method ,name) ,mdef (unnecessary ,name))  ;; return the function
@@ -3020,9 +3025,12 @@ f(x) = yt(x)
          (newtypes
           (if iskw
               `(,(car types) ,(cadr types) ,closure-type ,@(cdddr types))
-              `(,closure-type ,@(cdr types)))))
-    `(call (core svec) (call (core svec) ,@newtypes)
-           (call (core svec) ,@(append (cddr (cadddr te)) type-sp)))))
+              `(,closure-type ,@(cdr types))))
+         (loc (caddddr te)))
+    `(call (core svec)
+           (call (core svec) ,@newtypes)
+           (call (core svec) ,@(append (cddr (cadddr te)) type-sp))
+           ,loc)))
 
 ;; collect all toplevel-butfirst expressions inside `e`, and return
 ;; (ex . stmts), where `ex` is the expression to evaluated and
