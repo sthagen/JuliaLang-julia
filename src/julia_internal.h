@@ -1021,6 +1021,14 @@ extern jl_mutex_t safepoint_lock;
 void jl_mach_gc_end(void);
 #endif
 
+// -- typeset.c -- //
+
+typedef uint_t (*typeset_hash)(jl_value_t *val);
+typedef int (*typeset_eq)(jl_value_t *val, const void *key, uint_t hv);
+jl_value_t **jl_typeset_lookup_bp(jl_svec_t **cache JL_PROPAGATES_ROOT, typeset_eq eq, const void *key, uint_t hv, jl_value_t **notfound);
+jl_value_t *jl_typeset_lookup(jl_svec_t **cache JL_PROPAGATES_ROOT, typeset_eq eq, const void *key, uint_t hv, jl_value_t *notfound);
+void jl_typeset_insert(jl_svec_t **cache, jl_value_t *parent, typeset_hash hash, jl_value_t *val);
+
 // -- typemap.c -- //
 
 // a descriptor of a jl_typemap_t that gets
