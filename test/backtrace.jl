@@ -16,16 +16,18 @@ function get_bt_frames(functionname, bt)
 end
 
 # same-file inline
-eval(Expr(:function, Expr(:call, :test_inline_1),
-          Expr(:block, Expr(:line, 99, Symbol("backtrace.jl")),
-                       Expr(:block, Expr(:line, 42),
-                                    Expr(:meta, :push_loc, Symbol("backtrace.jl"), :inlfunc),
-                                    Expr(:line, 37),
-                                    Expr(:call, :throw, "foo"),
-                                    Expr(:meta, :pop_loc),
-                                    Expr(:line, 99)))))
+eval(Expr(:block,
+          Expr(:line, 101, Symbol("backtrace.jl")),
+          Expr(:function, Expr(:call, :test_inline_1),
+               Expr(:block, Expr(:line, 99, Symbol("backtrace.jl")),
+                    Expr(:block, Expr(:line, 42),
+                                 Expr(:meta, :push_loc, Symbol("backtrace.jl"), :inlfunc),
+                                 Expr(:line, 37),
+                                 Expr(:call, :throw, "foo"),
+                                 Expr(:meta, :pop_loc),
+                                 Expr(:line, 99))))))
 
-@test functionloc(test_inline_1) == ("backtrace.jl", 99)
+@test functionloc(test_inline_1) == ("backtrace.jl", 101)
 try
     test_inline_1()
     error("unexpected")
@@ -42,15 +44,17 @@ end
 
 # different-file inline
 const absfilepath = Sys.iswindows() ? "C:\\foo\\bar\\baz.jl" : "/foo/bar/baz.jl"
-eval(Expr(:function, Expr(:call, :test_inline_2),
-          Expr(:block, Expr(:line, 81, Symbol("backtrace.jl")),
-                       Expr(:block, Expr(:meta, :push_loc, Symbol(absfilepath)),
-                                    Expr(:line, 111),
-                                    Expr(:call, :throw, "foo"),
-                                    Expr(:meta, :pop_loc),
-                                    Expr(:line, 99)))))
+eval(Expr(:block,
+          Expr(:line, 101, Symbol("backtrace.jl")),
+          Expr(:function, Expr(:call, :test_inline_2),
+               Expr(:block, Expr(:line, 81, Symbol("backtrace.jl")),
+                    Expr(:block, Expr(:meta, :push_loc, Symbol(absfilepath)),
+                                 Expr(:line, 111),
+                                 Expr(:call, :throw, "foo"),
+                                 Expr(:meta, :pop_loc),
+                                 Expr(:line, 99))))))
 
-@test functionloc(test_inline_2) == ("backtrace.jl", 81)
+@test functionloc(test_inline_2) == ("backtrace.jl", 101)
 try
     test_inline_2()
     error("unexpected")
