@@ -90,7 +90,7 @@ static int8_t jl_cachearg_offset(jl_methtable_t *mt)
 JL_DLLEXPORT jl_method_instance_t *jl_specializations_get_linfo(jl_method_t *m JL_PROPAGATES_ROOT, jl_value_t *type, jl_svec_t *sparams)
 {
     JL_LOCK(&m->writelock);
-    struct jl_typemap_assoc search = {type, 1, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {type, 1, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *sf = jl_typemap_assoc_by_type(m->specializations, &search, /*offs*/0, /*subtype*/0);
     if (sf && jl_is_method_instance(sf->func.value)) {
         JL_UNLOCK(&m->writelock);
@@ -109,7 +109,7 @@ JL_DLLEXPORT jl_method_instance_t *jl_specializations_get_linfo(jl_method_t *m J
 
 JL_DLLEXPORT jl_value_t *jl_specializations_lookup(jl_method_t *m, jl_value_t *type)
 {
-    struct jl_typemap_assoc search = {type, 1, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {type, 1, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *sf = jl_typemap_assoc_by_type(m->specializations, &search, /*offs*/0, /*subtype*/0);
     if (!sf)
         return jl_nothing;
@@ -118,7 +118,7 @@ JL_DLLEXPORT jl_value_t *jl_specializations_lookup(jl_method_t *m, jl_value_t *t
 
 JL_DLLEXPORT jl_value_t *jl_methtable_lookup(jl_methtable_t *mt, jl_value_t *type, size_t world)
 {
-    struct jl_typemap_assoc search = {type, world, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {type, world, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *sf = jl_typemap_assoc_by_type(mt->defs, &search, /*offs*/0, /*subtype*/0);
     if (!sf)
         return jl_nothing;
@@ -860,7 +860,7 @@ static jl_method_instance_t *cache_method(
     // short-circuit (now that we hold the lock) if this entry is already present
     int8_t offs = mt ? jl_cachearg_offset(mt) : 1;
     { // scope block
-        struct jl_typemap_assoc search = {(jl_value_t*)tt, world, 0, NULL, 0, ~(size_t)0};
+        struct jl_typemap_assoc search = {(jl_value_t*)tt, world, NULL, 0, ~(size_t)0};
         jl_typemap_entry_t *entry = jl_typemap_assoc_by_type(*cache, &search, offs, /*subtype*/1);
         if (entry && entry->func.value)
             return entry->func.linfo;
@@ -994,7 +994,7 @@ static jl_method_instance_t *cache_method(
     // short-circuit if this exact entry is already present
     // to avoid adding a new duplicate copy of it
     if (cachett != tt && simplett == NULL) {
-        struct jl_typemap_assoc search = {(jl_value_t*)cachett, min_valid, 0, NULL, 0, ~(size_t)0};
+        struct jl_typemap_assoc search = {(jl_value_t*)cachett, min_valid, NULL, 0, ~(size_t)0};
         jl_typemap_entry_t *entry = jl_typemap_assoc_by_type(*cache, &search, offs, /*subtype*/1);
         if (entry && (jl_value_t*)entry->simplesig == jl_nothing) {
             if (jl_egal((jl_value_t*)guardsigs, (jl_value_t*)entry->guardsigs)) {
@@ -1093,7 +1093,7 @@ static jl_typemap_entry_t *jl_typemap_morespecific_by_type(jl_typemap_entry_t *f
 static jl_method_instance_t *jl_mt_assoc_by_type(jl_methtable_t *mt, jl_datatype_t *tt, int mt_cache, size_t world)
 {
     // caller must hold the mt->writelock
-    struct jl_typemap_assoc search = {(jl_value_t*)tt, world, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {(jl_value_t*)tt, world, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *entry = jl_typemap_assoc_by_type(mt->cache, &search, jl_cachearg_offset(mt), /*subtype*/1);
     if (entry && entry->func.value)
         return entry->func.linfo;
@@ -1217,7 +1217,7 @@ static int check_ambiguous_visitor(jl_typemap_entry_t *oldentry, struct typemap_
         // TODO: we might like to use `subtype = exact1 && exact2` here, but check_disabled_ambiguous_visitor
         // won't be able to handle that, so we might end up making some unnecessary mambig entries here
         // but I don't have any examples of such
-        struct jl_typemap_assoc search = {(jl_value_t*)isect, world, 0, NULL, 0, ~(size_t)0};
+        struct jl_typemap_assoc search = {(jl_value_t*)isect, world, NULL, 0, ~(size_t)0};
         jl_typemap_entry_t *l = jl_typemap_assoc_by_type(closure->defs, &search, /*offs*/0, /*subtype*/0);
         //assert((!subtype || l != after) && "bad typemap lookup result"); // should find `before` first
         if (l != NULL && l != before && l != after) {
@@ -1617,7 +1617,7 @@ JL_DLLEXPORT void jl_method_table_insert(jl_methtable_t *mt, jl_method_t *method
     JL_GC_PUSH1(&oldvalue);
     JL_LOCK(&mt->writelock);
     // first delete the existing entry (we'll disable it later)
-    struct jl_typemap_assoc search = {(jl_value_t*)type, method->primary_world, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {(jl_value_t*)type, method->primary_world, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *oldentry = jl_typemap_assoc_by_type(mt->defs, &search, /*offs*/0, /*subtype*/0);
     if (oldentry) {
         oldentry->max_world = method->primary_world - 1;
@@ -2330,7 +2330,7 @@ JL_DLLEXPORT jl_value_t *jl_gf_invoke_lookup(jl_value_t *types JL_PROPAGATES_ROO
         return jl_nothing;
 
     // XXX: return min/max world
-    struct jl_typemap_assoc search = {(jl_value_t*)types, world, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {(jl_value_t*)types, world, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *entry = jl_typemap_assoc_by_type(mt->defs, &search, /*offs*/0, /*subtype*/1);
     if (entry == NULL)
         return jl_nothing;
@@ -2415,7 +2415,7 @@ JL_DLLEXPORT jl_value_t *jl_get_invoke_lambda(jl_typemap_entry_t *entry, jl_valu
 
     jl_method_t *method = entry->func.method;
     jl_typemap_entry_t *tm = NULL;
-    struct jl_typemap_assoc search = {(jl_value_t*)tt, 1, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {(jl_value_t*)tt, 1, NULL, 0, ~(size_t)0};
     if (method->invokes != NULL) {
         tm = jl_typemap_assoc_by_type(method->invokes, &search, /*offs*/1, /*subtype*/1);
         if (tm) {
@@ -2717,7 +2717,7 @@ static jl_value_t *ml_matches(jl_typemap_t *defs, int offs,
     env.world = world;
     env.min_valid = *min_valid;
     env.max_valid = *max_valid;
-    struct jl_typemap_assoc search = {(jl_value_t*)type, world, 0, jl_emptysvec, env.min_valid, env.max_valid};
+    struct jl_typemap_assoc search = {(jl_value_t*)type, world, jl_emptysvec, env.min_valid, env.max_valid};
     JL_GC_PUSH5(&env.t, &env.matc, &env.match.env, &search.env, &env.match.ti);
     htable_new(&env.visited, 0);
     if (((jl_datatype_t*)unw)->isdispatchtuple) {

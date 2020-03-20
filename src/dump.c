@@ -3097,7 +3097,7 @@ static jl_method_t *jl_lookup_method(jl_methtable_t *mt, jl_datatype_t *sig, siz
 {
     if (world < jl_main_module->primary_world)
         world = jl_main_module->primary_world;
-    struct jl_typemap_assoc search = {(jl_value_t*)sig, world, 0, NULL, 0, ~(size_t)0};
+    struct jl_typemap_assoc search = {(jl_value_t*)sig, world, NULL, 0, ~(size_t)0};
     jl_typemap_entry_t *entry = jl_typemap_assoc_by_type(mt->defs, &search, /*offs*/0, /*subtype*/0);
     return (jl_method_t*)entry->func.value;
 }
@@ -3225,6 +3225,7 @@ static jl_value_t *_jl_restore_incremental(ios_t *f, jl_array_t *mod_array)
     };
     jl_array_t *restored = (jl_array_t*)jl_deserialize_value(&s, (jl_value_t**)&restored);
     serializer_worklist = restored;
+    assert(jl_isa((jl_value_t*)restored, jl_array_any_type));
 
     // get list of external generic functions
     jl_value_t *external_methods = jl_deserialize_value(&s, &external_methods);
