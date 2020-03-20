@@ -1369,7 +1369,8 @@ static int check_disabled_ambiguous_visitor(jl_typemap_entry_t *oldentry, struct
 static void method_overwrite(jl_typemap_entry_t *newentry, jl_method_t *oldvalue)
 {
     // method overwritten
-    if (jl_options.warn_overwrite == JL_OPTIONS_WARN_OVERWRITE_ON) {
+    if ((jl_options.warn_overwrite == JL_OPTIONS_WARN_OVERWRITE_ON) ||
+        (jl_options.incremental && jl_generating_output())) {
         jl_method_t *method = (jl_method_t*)newentry->func.method;
         jl_module_t *newmod = method->module;
         jl_module_t *oldmod = oldvalue->module;
