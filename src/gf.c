@@ -463,7 +463,7 @@ jl_value_t *jl_nth_slot_type(jl_value_t *sig, size_t i)
 //}
 
 static jl_value_t *ml_matches(jl_typemap_t *ml, int offs,
-                              jl_tupletype_t *type, int lim, int include_ambiguous, int include_deleted,
+                              jl_tupletype_t *type, int lim, int include_ambiguous,
                               size_t world, size_t *min_valid, size_t *max_valid);
 
 // get the compilation signature specialization for this method
@@ -895,7 +895,7 @@ static jl_method_instance_t *cache_method(
     if (!cache_with_orig && mt) {
         // now examine what will happen if we chose to use this sig in the cache
         // TODO: should we first check `compilationsig <: definition`?
-        temp = ml_matches(mt->defs, 0, compilationsig, MAX_UNSPECIALIZED_CONFLICTS, 1, 0, world, &min_valid, &max_valid);
+        temp = ml_matches(mt->defs, 0, compilationsig, MAX_UNSPECIALIZED_CONFLICTS, 1, world, &min_valid, &max_valid);
         int guards = 0;
         if (temp == jl_false) {
             cache_with_orig = 1;
@@ -958,7 +958,7 @@ static jl_method_instance_t *cache_method(
 
     if (cache_with_orig && mt) {
         // now examine defs to determine the min/max-valid range for this lookup result
-        (void)ml_matches(mt->defs, 0, cachett, -1, 0, 0, world, &min_valid, &max_valid);
+        (void)ml_matches(mt->defs, 0, cachett, -1, 0, world, &min_valid, &max_valid);
     }
     assert(mt == NULL || min_valid > 1);
 
@@ -1812,21 +1812,7 @@ JL_DLLEXPORT jl_value_t *jl_matching_methods(jl_tupletype_t *types, int lim, int
     jl_methtable_t *mt = jl_method_table_for(unw);
     if ((jl_value_t*)mt == jl_nothing)
         return jl_false; // indeterminate - ml_matches can't deal with this case
-    return ml_matches(mt->defs, 0, types, lim, include_ambiguous, 0, world, min_valid, max_valid);
-}
-
-jl_value_t *jl_matching_methods_including_deleted(jl_tupletype_t *types, size_t world)
-{
-    JL_TIMING(METHOD_MATCH);
-    size_t min_valid = 0;
-    size_t max_valid = ~(size_t)0;
-    jl_value_t *unw = jl_unwrap_unionall((jl_value_t*)types);
-    if (jl_is_tuple_type(unw) && jl_tparam0(unw) == jl_bottom_type)
-        return (jl_value_t*)jl_an_empty_vec_any;
-    jl_methtable_t *mt = jl_method_table_for(unw);
-    if ((jl_value_t*)mt == jl_nothing)
-        return jl_false; // indeterminate - ml_matches can't deal with this case
-    return ml_matches(mt->defs, 0, types, -1, 1, 1, world, &min_valid, &max_valid);
+    return ml_matches(mt->defs, 0, types, lim, include_ambiguous, world, min_valid, max_valid);
 }
 
 jl_method_instance_t *jl_get_unspecialized(jl_method_instance_t *method JL_PROPAGATES_ROOT)
@@ -2539,13 +2525,11 @@ struct ml_matches_env {
     size_t world;
     int lim;
     int include_ambiguous;  // whether ambiguous matches should be included
-    int include_deleted;  // whether deleted matches should be included (for incremental validation)
 };
 
 static int ml_matches_visitor(jl_typemap_entry_t *ml, struct typemap_intersection_env *closure0)
 {
     struct ml_matches_env *closure = container_of(closure0, struct ml_matches_env, match);
-    int deleted = 0;
     if (closure->world < ml->min_world) {
         // ignore method table entries that are part of a later world
         if (closure->max_valid >= ml->min_world)
@@ -2556,9 +2540,7 @@ static int ml_matches_visitor(jl_typemap_entry_t *ml, struct typemap_intersectio
         // ignore method table entries that have been replaced in the current world
         if (closure->min_valid <= ml->max_world)
             closure->min_valid = ml->max_world + 1;
-        deleted = 1;
-        if (!closure->include_deleted)
-            return 1;
+        return 1;
     }
     else {
         // intersect the env valid range with method's valid range
@@ -2587,7 +2569,7 @@ static int ml_matches_visitor(jl_typemap_entry_t *ml, struct typemap_intersectio
       more generally, we can stop when the type is a subtype of the
       union of all the signatures examined so far.
     */
-    int done = closure0->issubty && !deleted; // stop; signature fully covers queried type
+    int done = closure0->issubty; // stop; signature fully covers queried type
     // if this method would never actually match, we shouldn't add it to the results
     // in certain cases
     int return_this_match = 1;
@@ -2710,7 +2692,7 @@ static int ml_matches_visitor(jl_typemap_entry_t *ml, struct typemap_intersectio
 // Returns a match as an array of svec(argtypes, static_params, Method).
 // See below for the meaning of lim.
 static jl_value_t *ml_matches(jl_typemap_t *defs, int offs,
-                              jl_tupletype_t *type, int lim, int include_ambiguous, int include_deleted,
+                              jl_tupletype_t *type, int lim, int include_ambiguous,
                               size_t world, size_t *min_valid, size_t *max_valid)
 {
     jl_value_t *unw = jl_unwrap_unionall((jl_value_t*)type);
@@ -2731,11 +2713,10 @@ static jl_value_t *ml_matches(jl_typemap_t *defs, int offs,
     env.matc = NULL;
     env.lim = lim;
     env.include_ambiguous = include_ambiguous;
-    env.include_deleted = include_deleted;
     env.world = world;
     env.min_valid = *min_valid;
     env.max_valid = *max_valid;
-    struct jl_typemap_assoc search = {(jl_value_t*)type, world, include_deleted ? (~(size_t)0) >> 1 : 0, jl_emptysvec, env.min_valid, env.max_valid};
+    struct jl_typemap_assoc search = {(jl_value_t*)type, world, 0, jl_emptysvec, env.min_valid, env.max_valid};
     JL_GC_PUSH5(&env.t, &env.matc, &env.match.env, &search.env, &env.match.ti);
     htable_new(&env.visited, 0);
     if (((jl_datatype_t*)unw)->isdispatchtuple) {
@@ -2743,16 +2724,10 @@ static jl_value_t *ml_matches(jl_typemap_t *defs, int offs,
         env.min_valid = search.min_valid;
         env.max_valid = search.max_valid;
         if (ml) {
-            if (include_deleted && ml->max_world < world) {
-                // the best matching method was deleted, so we need to do more work to list all of them
-                jl_typemap_intersection_visitor(defs, offs, &env.match);
-            }
-            else {
-                env.match.ti = (jl_value_t*)type;
-                env.match.env = search.env;
-                env.match.issubty = 1;
-                env.match.fptr(ml, &env.match); // also matches all ambig and prior, as needed
-            }
+            env.match.ti = (jl_value_t*)type;
+            env.match.env = search.env;
+            env.match.issubty = 1;
+            env.match.fptr(ml, &env.match); // also matches all ambig and prior, as needed
         }
     }
     else {
