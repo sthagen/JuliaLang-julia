@@ -1043,8 +1043,13 @@ for line in ["′", "abstract", "type"]
         sprint(show, help_result(line)::Union{Markdown.MD,Nothing}))
 end
 
+# PR 35154
 @test occursin("|=", sprint(show, help_result("|=")))
 @test occursin("broadcast", sprint(show, help_result(".=")))
+
+# PR 35277
+@test occursin("identical", sprint(show, help_result("===")))
+@test occursin("broadcast", sprint(show, help_result(".<=")))
 
 # Issue #25930
 
@@ -1068,6 +1073,13 @@ let text =
     @test isa(mdbrief.content[2], Markdown.Paragraph)
     @test isa(mdbrief.content[3], REPL.Message)
     @test occursin("??", mdbrief.content[3].msg)
+end
+
+# issue #35216: empty and non-strings in H1 headers
+let emptyH1 = Markdown.parse("# "),
+    codeH1 = Markdown.parse("# `hello`")
+    @test emptyH1 == REPL.trimdocs(emptyH1, false) == REPL.trimdocs(emptyH1, true)
+    @test codeH1 == REPL.trimdocs(codeH1, false) == REPL.trimdocs(codeH1, true)
 end
 
 module BriefExtended
