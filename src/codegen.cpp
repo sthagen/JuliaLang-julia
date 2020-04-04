@@ -4683,7 +4683,7 @@ Function *jl_cfunction_object(jl_function_t *ff, jl_value_t *declrt, jl_tupletyp
     else {
         cache_l2 = jl_eqtable_get(jl_cfunction_list, ft, NULL);
         if (cache_l2) {
-            struct jl_typemap_assoc search = {(jl_value_t*)argt, 1, 0, NULL, 0, ~(size_t)0};
+            struct jl_typemap_assoc search = {(jl_value_t*)argt, 1, NULL, 0, ~(size_t)0};
             cache_l3 = jl_typemap_assoc_by_type(cache_l2, &search, /*offs*/0, /*subtype*/0);
             if (cache_l3) {
                 jl_svec_t *sf = (jl_svec_t*)cache_l3->func.value;
@@ -5820,10 +5820,13 @@ static std::pair<std::unique_ptr<Module>, jl_llvm_functions_t>
     auto coverageVisitStmt = [&] (size_t dbg) {
         if (dbg == 0)
             return;
+        // Compute inlining stack for current line, inner frame first
         while (dbg) {
             new_lineinfo.push_back(dbg);
             dbg = linetable.at(dbg).inlined_at;
         }
+        // Visit frames which differ from previous statement as tracked in
+        // current_lineinfo (tracked outer frame first).
         current_lineinfo.resize(new_lineinfo.size(), 0);
         for (dbg = 0; dbg < new_lineinfo.size(); dbg++) {
             unsigned newdbg = new_lineinfo[new_lineinfo.size() - dbg - 1];
@@ -5906,15 +5909,6 @@ static std::pair<std::unique_ptr<Module>, jl_llvm_functions_t>
         BB[label] = bb;
     }
 
-    if (do_coverage(mod_is_user_mod)) {
-        coverageVisitLine(ctx, ctx.file, toplineno);
-        if (linetable.size() >= 2) {
-            // avoid double-counting the entry line
-            const auto &info = linetable.at(1);
-            if (info.file == ctx.file && info.line == toplineno && info.is_user_code == mod_is_user_mod)
-                current_lineinfo.push_back(1);
-        }
-    }
     Value *sync_bytes = nullptr;
     if (do_malloc_log(true))
         sync_bytes = ctx.builder.CreateCall(prepare_call(diff_gc_total_bytes_func), {});
