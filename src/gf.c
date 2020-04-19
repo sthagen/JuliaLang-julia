@@ -1356,7 +1356,8 @@ static int check_ambiguous_visitor(jl_typemap_entry_t *oldentry, struct typemap_
 
     // ok: record that this method definition is being partially replaced
     // (either with a real definition, or an ambiguity error)
-    if (shadowed) {
+    // be careful not to try to scan something from the current dump-reload though
+    if (shadowed && oldentry->min_world != closure->newentry->min_world) {
         if (closure->shadowed == NULL) {
             closure->shadowed = (jl_value_t*)oldentry;
         }
@@ -2072,7 +2073,7 @@ jl_method_instance_t *jl_get_specialization1(jl_tupletype_t *types JL_PROPAGATES
 
 static void _generate_from_hint(jl_method_instance_t *mi, size_t world)
 {
-    int generating_llvm = jl_options.outputo || jl_options.outputbc || jl_options.outputunoptbc;
+    int generating_llvm = jl_options.outputo || jl_options.outputbc || jl_options.outputunoptbc || jl_options.outputasm;
     // If we are saving ji files (e.g. package pre-compilation or intermediate sysimg build steps),
     // don't bother generating anything since it won't be saved.
     if (jl_rettype_inferred(mi, world, world) == jl_nothing)
