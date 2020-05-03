@@ -579,6 +579,18 @@ end
     @test findlast(isequal(0x00), [0x01, 0x00]) == 2
     @test findnext(isequal(0x00), [0x00, 0x01, 0x00], 2) == 3
     @test findprev(isequal(0x00), [0x00, 0x01, 0x00], 2) == 1
+
+    @testset "issue 32568" for T = (UInt, BigInt)
+        @test findnext(!iszero, a, T(1)) isa keytype(a)
+        @test findnext(!iszero, a, T(2)) isa keytype(a)
+        @test findprev(!iszero, a, T(4)) isa keytype(a)
+        @test findprev(!iszero, a, T(5)) isa keytype(a)
+        b = [true, false, true]
+        @test findnext(b, T(2)) isa keytype(b)
+        @test findnext(b, T(3)) isa keytype(b)
+        @test findprev(b, T(1)) isa keytype(b)
+        @test findprev(b, T(2)) isa keytype(b)
+    end
 end
 @testset "find with Matrix" begin
     A = [1 2 0; 3 4 0]
@@ -2755,4 +2767,36 @@ let n = 12000000, k = 257000000
         sizehint!(v, n)
         v[end] == (n, 0.5)
     end
+end
+
+@testset "BoundsError printing" begin
+    x = rand(2, 2)
+
+    err = try x[10, :]; catch err; err; end
+    b = IOBuffer()
+    showerror(b, err)
+    @test String(take!(b)) ==
+        "BoundsError: attempt to access 2×2 Array{Float64,2} at index [10, 1:2]"
+
+    err = try x[10, trues(2)]; catch err; err; end
+    b = IOBuffer()
+    showerror(b, err)
+    @test String(take!(b)) ==
+        "BoundsError: attempt to access 2×2 Array{Float64,2} at index [10, Bool[1, 1]]"
+
+    # Also test : directly for custom types for which it may appear as-is
+    err = BoundsError(x, (10, :))
+    showerror(b, err)
+    @test String(take!(b)) ==
+        "BoundsError: attempt to access 2×2 Array{Float64,2} at index [10, :]"
+
+    err = BoundsError(x, "bad index")
+    showerror(b, err)
+    @test String(take!(b)) ==
+        "BoundsError: attempt to access 2×2 Array{Float64,2} at index [\"bad index\"]"
+
+    err = BoundsError(x, (10, "bad index"))
+    showerror(b, err)
+    @test String(take!(b)) ==
+        "BoundsError: attempt to access 2×2 Array{Float64,2} at index [10, \"bad index\"]"
 end

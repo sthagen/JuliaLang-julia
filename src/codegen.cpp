@@ -57,12 +57,14 @@
 // support
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/Optional.h>
+#include <llvm/ADT/Statistic.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/FormattedStream.h>
 #include <llvm/Support/SourceMgr.h> // for llvmcall
 #include <llvm/Transforms/Utils/Cloning.h> // for llvmcall inlining
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
 #include <llvm/IR/Verifier.h> // for llvmcall validation
+#include <llvm/IR/PassTimingInfo.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
 
 // C API
@@ -3855,14 +3857,8 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr, ssize_t ssaval)
             ctx.builder.CreateCall(prepare_call(jltopeval_func), args);
             return ghostValue(jl_nothing_type);
         }
-        if (head == abstracttype_sym || head == structtype_sym ||
-            head == primtype_sym) {
-            jl_errorf("type definition not allowed inside a local scope");
-        }
-        else {
-            jl_errorf("unsupported or misplaced expression \"%s\" in function %s",
-                      jl_symbol_name(head), ctx.name);
-        }
+        jl_errorf("unsupported or misplaced expression \"%s\" in function %s",
+                  jl_symbol_name(head), ctx.name);
     }
     return jl_cgval_t();
 }
@@ -7602,6 +7598,13 @@ extern "C" void jl_init_codegen(void)
     UBOX_F(ssavalue,size);
 
     jl_init_intrinsic_functions_codegen(m);
+}
+
+extern "C" void jl_teardown_codegen()
+{
+    // output LLVM timings and statistics
+    reportAndResetTimings();
+    PrintStatistics();
 }
 
 // the rest of this file are convenience functions
