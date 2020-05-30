@@ -25,7 +25,7 @@ function show(io::IO, t::AbstractDict{K,V}) where V where K
     recur_io = IOContext(io, :SHOWN_SET => t,
                              :typeinfo => eltype(t))
 
-    limit::Bool = get(io, :limit, false)
+    limit = get(io, :limit, false)::Bool
     # show in a Julia-syntax-like form: Dict(k=>v, ...)
     print(io, typeinfo_prefix(io, t)[1])
     print(io, '(')
@@ -742,7 +742,7 @@ Create a new entry in the `ImmutableDict` for a `key => value` pair
 ImmutableDict
 ImmutableDict(KV::Pair{K,V}) where {K,V} = ImmutableDict{K,V}(KV[1], KV[2])
 ImmutableDict(t::ImmutableDict{K,V}, KV::Pair) where {K,V} = ImmutableDict{K,V}(t, KV[1], KV[2])
-ImmutableDict(KV::Pair, rest::Pair...) = ImmutableDict(ImmutableDict(rest...), KV)
+ImmutableDict(KV::Pair, rest::Pair...) = ImmutableDict(ImmutableDict(KV), rest...)
 
 function in(key_value::Pair, dict::ImmutableDict, valcmp=(==))
     key, value = key_value
