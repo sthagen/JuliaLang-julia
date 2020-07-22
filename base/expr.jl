@@ -77,6 +77,7 @@ end
 
 ==(x::Expr, y::Expr) = x.head === y.head && isequal(x.args, y.args)
 ==(x::QuoteNode, y::QuoteNode) = isequal(x.value, y.value)
+==(stmt1::Core.PhiNode, stmt2::Core.PhiNode) = stmt1.edges == stmt2.edges && stmt1.values == stmt2.values
 
 """
     macroexpand(m::Module, x; recursive=true)
@@ -346,9 +347,9 @@ function findmeta_block(exargs, argsmatch=args->true)
     for i = 1:length(exargs)
         a = exargs[i]
         if isa(a, Expr)
-            if (a::Expr).head === :meta && argsmatch((a::Expr).args)
+            if a.head === :meta && argsmatch(a.args)
                 return i, exargs
-            elseif (a::Expr).head === :block
+            elseif a.head === :block
                 idx, exa = findmeta_block(a.args, argsmatch)
                 if idx != 0
                     return idx, exa

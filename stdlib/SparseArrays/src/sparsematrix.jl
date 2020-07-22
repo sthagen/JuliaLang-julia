@@ -109,8 +109,15 @@ julia> nnz(A)
 ```
 """
 nnz(S::AbstractSparseMatrixCSC) = Int(getcolptr(S)[size(S, 2) + 1] - 1)
-nnz(S::ReshapedArray{T,1,<:AbstractSparseMatrixCSC}) where T = nnz(parent(S))
-count(pred, S::AbstractSparseMatrixCSC) = count(pred, nzvalview(S)) + pred(zero(eltype(S)))*(prod(size(S)) - nnz(S))
+nnz(S::ReshapedArray{<:Any,1,<:AbstractSparseMatrixCSC}) = nnz(parent(S))
+nnz(S::UpperTriangular{<:Any,<:AbstractSparseMatrixCSC}) = nnz1(S)
+nnz(S::LowerTriangular{<:Any,<:AbstractSparseMatrixCSC}) = nnz1(S)
+nnz(S::SparseMatrixCSCView) = nnz1(S)
+nnz1(S) = sum(length.(nzrange.(Ref(S), axes(S, 2))))
+
+function count(pred, S::AbstractSparseMatrixCSC)
+    count(pred, nzvalview(S)) + pred(zero(eltype(S)))*(prod(size(S)) - nnz(S))
+end
 
 """
     nonzeros(A)
@@ -130,7 +137,7 @@ julia> A = sparse(2I, 3, 3)
  ⋅  ⋅  2
 
 julia> nonzeros(A)
-3-element Array{Int64,1}:
+3-element Vector{Int64}:
  2
  2
  2
@@ -138,6 +145,8 @@ julia> nonzeros(A)
 """
 nonzeros(S::SparseMatrixCSC) = getfield(S, :nzval)
 nonzeros(S::SparseMatrixCSCView)  = nonzeros(S.parent)
+nonzeros(S::UpperTriangular{<:Any,<:SparseMatrixCSCUnion}) = nonzeros(S.data)
+nonzeros(S::LowerTriangular{<:Any,<:SparseMatrixCSCUnion}) = nonzeros(S.data)
 
 """
     rowvals(A::AbstractSparseMatrixCSC)
@@ -156,7 +165,7 @@ julia> A = sparse(2I, 3, 3)
  ⋅  ⋅  2
 
 julia> rowvals(A)
-3-element Array{Int64,1}:
+3-element Vector{Int64}:
  1
  2
  3
@@ -164,6 +173,8 @@ julia> rowvals(A)
 """
 rowvals(S::SparseMatrixCSC) = getfield(S, :rowval)
 rowvals(S::SparseMatrixCSCView) = rowvals(S.parent)
+rowvals(S::UpperTriangular{<:Any,<:SparseMatrixCSCUnion}) = rowvals(S.data)
+rowvals(S::LowerTriangular{<:Any,<:SparseMatrixCSCUnion}) = rowvals(S.data)
 
 """
     nzrange(A::AbstractSparseMatrixCSC, col::Integer)
@@ -186,6 +197,8 @@ column. In conjunction with [`nonzeros`](@ref) and
 """
 nzrange(S::AbstractSparseMatrixCSC, col::Integer) = getcolptr(S)[col]:(getcolptr(S)[col+1]-1)
 nzrange(S::SparseMatrixCSCView, col::Integer) = nzrange(S.parent, S.indices[2][col])
+nzrange(S::UpperTriangular{<:Any,<:SparseMatrixCSCUnion}, i::Integer) = nzrangeup(S.data, i)
+nzrange(S::LowerTriangular{<:Any,<:SparseMatrixCSCUnion}, i::Integer) = nzrangelo(S.data, i)
 
 function Base.isstored(A::AbstractSparseMatrixCSC, i::Integer, j::Integer)
     @boundscheck checkbounds(A, i, j)
@@ -652,7 +665,7 @@ Convert an AbstractMatrix `A` into a sparse matrix.
 # Examples
 ```jldoctest
 julia> A = Matrix(1.0I, 3, 3)
-3×3 Array{Float64,2}:
+3×3 Matrix{Float64}:
  1.0  0.0  0.0
  0.0  1.0  0.0
  0.0  0.0  1.0
@@ -1699,7 +1712,7 @@ function conj!(A::AbstractSparseMatrixCSC)
     return A
 end
 function (-)(A::AbstractSparseMatrixCSC)
-    nzval = similar(nonzeros(A))
+    nzval = similar(nonzeros(A), typeof(-zero(eltype(A))))
     map!(-, view(nzval, 1:nnz(A)), nzvalview(A))
     return SparseMatrixCSC(size(A, 1), size(A, 2), copy(getcolptr(A)), copy(rowvals(A)), nzval)
 end
@@ -3513,7 +3526,7 @@ end
 
 """
     spdiagm(kv::Pair{<:Integer,<:AbstractVector}...)
-    spdiagm(m::Integer, n::Ingeger, kv::Pair{<:Integer,<:AbstractVector}...)
+    spdiagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:AbstractVector}...)
 
 Construct a sparse diagonal matrix from `Pair`s of vectors and diagonals.
 Each vector `kv.second` will be placed on the `kv.first` diagonal.  By
