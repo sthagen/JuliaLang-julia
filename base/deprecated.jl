@@ -207,6 +207,8 @@ macro get!(h, key0, default)
     end
 end
 
+pointer(V::SubArray{<:Any,<:Any,<:Array,<:Tuple{Vararg{RangeIndex}}}, is::Tuple) = pointer(V, CartesianIndex(is))
+
 # END 1.5 deprecations
 
 # BEGIN 1.6 deprecations
@@ -218,5 +220,14 @@ iterate(match::Core.MethodMatch, field::Int=1) =
     field > nfields(match) ? nothing : (getfield(match, field), field+1)
 getindex(match::Core.MethodMatch, field::Int) =
     getfield(match, field)
+
+
+# these were internal functions, but some packages seem to be relying on them
+tuple_type_head(T::Type) = fieldtype(T, 1)
+tuple_type_cons(::Type, ::Type{Union{}}) = Union{}
+function tuple_type_cons(::Type{S}, ::Type{T}) where T<:Tuple where S
+    @_pure_meta
+    Tuple{S, T.parameters...}
+end
 
 # END 1.6 deprecations

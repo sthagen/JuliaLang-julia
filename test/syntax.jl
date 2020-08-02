@@ -2292,3 +2292,10 @@ end
 
     @test (Int .<: [Integer] .<: [Real]) == [true]
 end
+
+@test :(a <-- b <-- c) == Expr(:call, :<--, :a, Expr(:call, :<--, :b, :c))
+@test :(a .<-- b.<--c) == Expr(:call, :.<--, :a, Expr(:call, :.<--, :b, :c))
+@test :(a<-->b<-->c) == Expr(:call, :<-->, :a, Expr(:call, :<-->, :b, :c))
+@test :(a.<-->b .<--> c) == Expr(:call, :.<-->, :a, Expr(:call, :.<-->, :b, :c))
+@test_throws ParseError("invalid operator \"<---\"") Meta.parse("1<---2")
+@test_throws ParseError("invalid operator \".<---\"") Meta.parse("1 .<--- 2")

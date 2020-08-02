@@ -580,7 +580,6 @@ extern JL_DLLEXPORT jl_datatype_t *jl_tvar_type JL_GLOBALLY_ROOTED;
 
 extern JL_DLLEXPORT jl_datatype_t *jl_any_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_unionall_t *jl_type_type JL_GLOBALLY_ROOTED;
-extern JL_DLLEXPORT jl_unionall_t *jl_typetype_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_typename_type JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_typename_t *jl_type_typename JL_GLOBALLY_ROOTED;
 extern JL_DLLEXPORT jl_datatype_t *jl_symbol_type JL_GLOBALLY_ROOTED;
@@ -2077,6 +2076,11 @@ typedef struct {
 
 #define jl_current_task (jl_get_ptls_states()->current_task)
 #define jl_root_task (jl_get_ptls_states()->root_task)
+
+JL_DLLEXPORT jl_value_t *jl_get_current_task(void);
+
+JL_DLLEXPORT jl_jmp_buf *jl_get_safe_restore(void);
+JL_DLLEXPORT void jl_set_safe_restore(jl_jmp_buf *);
 
 // codegen interface ----------------------------------------------------------
 // The root propagation here doesn't have to be literal, but callers should

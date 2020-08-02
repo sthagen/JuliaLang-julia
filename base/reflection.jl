@@ -241,40 +241,6 @@ isconst(m::Module, s::Symbol) =
     ccall(:jl_is_const, Cint, (Any, Any), m, s) != 0
 
 """
-    @isdefined s -> Bool
-
-Tests whether variable `s` is defined in the current scope.
-
-See also [`isdefined`](@ref).
-
-# Examples
-```jldoctest
-julia> @isdefined newvar
-false
-
-julia> newvar = 1
-1
-
-julia> @isdefined newvar
-true
-
-julia> function f()
-           println(@isdefined x)
-           x = 3
-           println(@isdefined x)
-       end
-f (generic function with 1 method)
-
-julia> f()
-false
-true
-```
-"""
-macro isdefined(s::Symbol)
-    return Expr(:isdefined, esc(s))
-end
-
-"""
     @locals()
 
 Construct a dictionary of the names (as symbols) and values of all local
@@ -586,31 +552,6 @@ struct type with no fields.
 issingletontype(@nospecialize(t)) = (@_pure_meta; isa(t, DataType) && isdefined(t, :instance))
 
 """
-    Base.parameter_upper_bound(t::UnionAll, idx)
-
-Determine the upper bound of a type parameter in the underlying datatype.
-This method should generally not be relied upon:
-code instead should usually use static parameters in dispatch to extract these values.
-
-# Examples
-```jldoctest
-julia> struct Foo{T<:AbstractFloat, N}
-           x::Tuple{T, N}
-       end
-
-julia> Base.parameter_upper_bound(Foo, 1)
-AbstractFloat
-
-julia> Base.parameter_upper_bound(Foo, 2)
-Any
-```
-"""
-function parameter_upper_bound(t::UnionAll, idx)
-    @_pure_meta
-    return rewrap_unionall((unwrap_unionall(t)::DataType).parameters[idx], t)
-end
-
-"""
     typeintersect(T, S)
 
 Compute a type that contains the intersection of `T` and `S`. Usually this will be the
@@ -694,6 +635,8 @@ function fieldindex(T::DataType, name::Symbol, err::Bool=true)
     return Int(ccall(:jl_field_index, Cint, (Any, Any, Cint), T, name, err)+1)
 end
 
+fieldindex(t::UnionAll, name::Symbol, err::Bool=true) = fieldindex(something(argument_datatype(t)), name, err)
+
 argument_datatype(@nospecialize t) = ccall(:jl_argument_datatype, Any, (Any,), t)
 
 """
@@ -776,13 +719,12 @@ julia> instances(Color)
 function instances end
 
 function to_tuple_type(@nospecialize(t))
-    @_pure_meta
-    if isa(t,Tuple) || isa(t,AbstractArray) || isa(t,SimpleVector)
+    if isa(t, Tuple) || isa(t, AbstractArray) || isa(t, SimpleVector)
         t = Tuple{t...}
     end
-    if isa(t,Type) && t<:Tuple
+    if isa(t, Type) && t <: Tuple
         for p in unwrap_unionall(t).parameters
-            if !(isa(p,Type) || isa(p,TypeVar))
+            if !(isa(p, Type) || isa(p, TypeVar))
                 error("argument tuple type must contain only types")
             end
         end
@@ -864,6 +806,9 @@ function _methods_by_ftype(@nospecialize(t), lim::Int, world::UInt)
     return _methods_by_ftype(t, lim, world, false, UInt[typemin(UInt)], UInt[typemax(UInt)], Cint[0])
 end
 function _methods_by_ftype(@nospecialize(t), lim::Int, world::UInt, ambig::Bool, min::Array{UInt,1}, max::Array{UInt,1}, has_ambig::Array{Int32,1})
+    return ccall(:jl_matching_methods, Any, (Any, Cint, Cint, UInt, Ptr{UInt}, Ptr{UInt}, Ptr{Int32}), t, lim, ambig, world, min, max, has_ambig)::Union{Array{Any,1}, Bool}
+end
+function _methods_by_ftype(@nospecialize(t), lim::Int, world::UInt, ambig::Bool, min::Ref{UInt}, max::Ref{UInt}, has_ambig::Ref{Int32})
     return ccall(:jl_matching_methods, Any, (Any, Cint, Cint, UInt, Ptr{UInt}, Ptr{UInt}, Ptr{Int32}), t, lim, ambig, world, min, max, has_ambig)::Union{Array{Any,1}, Bool}
 end
 

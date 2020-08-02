@@ -13,7 +13,7 @@ OPENLIBM_VER = 0.7.0
 OPENLIBM_BB_REL = 0
 UNWIND_VER = 1.3.1
 UNWIND_BB_REL = 4
-OSXUNWIND_VER = 0.0.5
+OSXUNWIND_VER = 0.0.6
 OSXUNWIND_BB_REL = 0
 GMP_VER = 6.2.0
 GMP_BB_REL = 1
@@ -29,7 +29,7 @@ CURL_BB_REL = 1
 LIBGIT2_VER = 0.28.5
 LIBGIT2_BB_REL = 0
 LIBUV_VER = 1.29.1
-LIBUV_BB_REL = 6
+LIBUV_BB_REL = 8
 OBJCONV_VER = 2.49.0
 OBJCONV_BB_REL = 0
 ZLIB_VER = 1.2.11
@@ -40,4 +40,4 @@ P7ZIP_BB_REL = 1
 # Specify the version of the Mozilla CA Certificate Store to obtain.
 # The versions of cacert.pem are identified by the date (YYYY-MM-DD) of their changes.
 # See https://curl.haxx.se/docs/caextract.html for more details.
-MOZILLA_CACERT_VERSION := 2020-01-01
+MOZILLA_CACERT_VERSION := 2020-07-22

@@ -225,6 +225,8 @@ tlayout = TLayout(5,7,11)
 @test fieldnames(TLayout) == (:x, :y, :z) == Base.propertynames(tlayout)
 @test hasfield(TLayout, :y)
 @test !hasfield(TLayout, :a)
+@test hasfield(Complex, :re)
+@test !hasfield(Complex, :qxq)
 @test hasproperty(tlayout, :x)
 @test !hasproperty(tlayout, :p)
 @test [(fieldoffset(TLayout,i), fieldname(TLayout,i), fieldtype(TLayout,i)) for i = 1:fieldcount(TLayout)] ==
@@ -558,10 +560,6 @@ end
 @test isstructtype(ReflectionExample)
 @test !isstructtype(Int)
 @test isstructtype(TLayout)
-
-@test Base.parameter_upper_bound(ReflectionExample, 1) === AbstractFloat
-@test Base.parameter_upper_bound(ReflectionExample, 2) === Any
-@test Base.parameter_upper_bound(ReflectionExample{T, N} where T where N <: Real, 2) === Real
 
 let
     wrapperT(T) = Base.typename(T).wrapper

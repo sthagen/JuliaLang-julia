@@ -927,12 +927,16 @@ function _fieldtype_nothrow(@nospecialize(s), exact::Bool, name::Const)
     isa(fld, Int) || return false
     ftypes = datatype_fieldtypes(u)
     nf = length(ftypes)
-    if u.name === Tuple.name && fld >= nf && isvarargtype(ftypes[nf])
-        # If we don't know the exact type, the length of the tuple will be determined
-        # at runtime and we can't say anything.
-        return exact
+    fld >= 1 || return false
+    if u.name === Tuple.name && nf > 0 && isvarargtype(ftypes[nf])
+        if !exact && fld >= nf
+            # If we don't know the exact type, the length of the tuple will be determined
+            # at runtime and we can't say anything.
+            return false
+        end
+    elseif fld > nf
+        return false
     end
-    (fld >= 1 && fld <= nf) || return false
     return true
 end
 
@@ -1234,14 +1238,14 @@ function invoke_tfunc(interp::AbstractInterpreter, @nospecialize(ft), @nospecial
     isdispatchelem(ft) || return Any # check that we might not have a subtype of `ft` at runtime, before doing supertype lookup below
     types = rewrap_unionall(Tuple{ft, unwrap_unionall(types).parameters...}, types)
     argtype = Tuple{ft, argtype.parameters...}
-    meth = ccall(:jl_gf_invoke_lookup, Any, (Any, UInt), types, get_world_counter(interp))
-    if meth === nothing
+    result = findsup(types, method_table(interp))
+    if result === nothing
         return Any
     end
-    # XXX: update_valid_age!(min_valid[1], max_valid[1], sv)
-    meth = meth::Method
-    (ti, env) = ccall(:jl_type_intersection_with_env, Any, (Any, Any), argtype, meth.sig)::SimpleVector
-    rt, edge = typeinf_edge(interp, meth, ti, env, sv)
+    method, valid_worlds = result
+    update_valid_age!(sv, valid_worlds)
+    (ti, env) = ccall(:jl_type_intersection_with_env, Any, (Any, Any), argtype, method.sig)::SimpleVector
+    rt, edge = typeinf_edge(interp, method, ti, env, sv)
     edge !== nothing && add_backedge!(edge::MethodInstance, sv)
     return rt
 end

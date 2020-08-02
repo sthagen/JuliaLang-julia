@@ -6,6 +6,8 @@ New language features
 
 * Types written with `where` syntax can now be used to define constructors, e.g.
   `(Foo{T} where T)(x) = ...`.
+* `<--` and `<-->` are now available as infix operators, with the same precedence
+  and associativity as other arrow-like operators ([#36666]).
 
 Language changes
 ----------------
@@ -49,6 +51,7 @@ New library functions
 
 * New function `Base.kron!` and corresponding overloads for various matrix types for performing Kronecker product in-place. ([#31069]).
 * New function `Base.Threads.foreach(f, channel::Channel)` for multithreaded `Channel` consumption. ([#34543]).
+* New function `Base.readeach(io, T)` for iteratively performing `read(io, T)`. ([#36150])
 * `Iterators.map` is added. It provides another syntax `Iterators.map(f, iterators...)`
   for writing `(f(args...) for args in zip(iterators...))`, i.e. a lazy `map` ([#34352]).
 * New function `sincospi` for simultaneously computing `sinpi(x)` and `cospi(x)` more
@@ -78,6 +81,7 @@ Standard library changes
 * New method `LinearAlgebra.issuccess(::CholeskyPivoted)` for checking whether pivoted Cholesky factorization was successful ([#36002]).
 * `UniformScaling` can now be indexed into using ranges to return dense matrices and vectors ([#24359]).
 * New function `LinearAlgebra.BLAS.get_num_threads()` for getting the number of BLAS threads. ([#36360])
+* `(+)(::UniformScaling)` is now defined, making `+I` a valid unary operation. ([#36784])
 
 #### Markdown
 
@@ -107,6 +111,9 @@ Standard library changes
   + `numoptions`, returning the number of items in the menu, has been added as an alternative to implementing `options`
   + `suppress_output` (primarily a testing option) has been added as a keyword argument to `request`,
     rather than a configuration option
+
+* Windows REPL now supports 24-bit colors, by correctly interpreting virtual terminal escapes.
+
 
 #### SparseArrays
 
