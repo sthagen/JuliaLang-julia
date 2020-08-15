@@ -65,6 +65,25 @@
 #  define JL_THREAD_LOCAL
 #endif
 
+#if defined(__has_feature) // Clang flavor
+#if __has_feature(address_sanitizer)
+#define JL_ASAN_ENABLED
+#endif
+#if __has_feature(memory_sanitizer)
+#define JL_MSAN_ENABLED
+#endif
+#if __has_feature(thread_sanitizer)
+#if __clang_major__ < 11
+#error Thread sanitizer runtime libraries in clang < 11 leak memory and cannot be used
+#endif
+#define JL_TSAN_ENABLED
+#endif
+#else // GCC flavor
+#if defined(__SANITIZE_ADDRESS__)
+#define JL_ASAN_ENABLED
+#endif
+#endif // __has_feature
+
 #define container_of(ptr, type, member) \
     ((type *) ((char *)(ptr) - offsetof(type, member)))
 
@@ -1772,16 +1791,23 @@ typedef struct _jl_task_t {
     jl_value_t *next; // invasive linked list for scheduler
     jl_value_t *queue; // invasive linked list for scheduler
     jl_value_t *tls;
-    jl_sym_t *state;
     jl_value_t *donenotify;
     jl_value_t *result;
     jl_value_t *exception;
     jl_value_t *backtrace;
     jl_value_t *logstate;
     jl_function_t *start;
+    uint8_t _state;
     uint8_t sticky; // record whether this Task can be migrated to a new thread
 
 // hidden state:
+    // id of owning thread - does not need to be defined until the task runs
+    int16_t tid;
+    // multiqueue priority
+    int16_t prio;
+    // current world age
+    size_t world_age;
+
     jl_ucontext_t ctx; // saved thread state
     void *stkbuf; // malloc'd memory (either copybuf or stack)
     size_t bufsz; // actual sizeof stkbuf
@@ -1794,18 +1820,13 @@ typedef struct _jl_task_t {
     jl_gcframe_t *gcstack;
     // saved exception stack
     jl_excstack_t *excstack;
-    // current world age
-    size_t world_age;
 
-    // id of owning thread
-    // does not need to be defined until the task runs
-    int16_t tid;
-    /* for the multiqueue */
-    int16_t prio;
-    // This is statically initialized when the task is not holding any locks
-    arraylist_t locks;
     jl_timing_block_t *timing_stack;
 } jl_task_t;
+
+#define JL_TASK_STATE_RUNNABLE 0
+#define JL_TASK_STATE_DONE     1
+#define JL_TASK_STATE_FAILED   2
 
 JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t*, jl_value_t*, size_t);
 JL_DLLEXPORT void jl_switchto(jl_task_t **pt);
@@ -1977,6 +1998,7 @@ typedef struct {
     int8_t incremental;
     int8_t image_file_specified;
     int8_t warn_scope;
+    int8_t image_codegen;
 } jl_options_t;
 
 extern JL_DLLEXPORT jl_options_t jl_options;

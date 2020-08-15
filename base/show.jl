@@ -202,7 +202,7 @@ end
 
 function show(io::IO, ::MIME"text/plain", t::Task)
     show(io, t)
-    if t.state === :failed
+    if istaskfailed(t)
         println(io)
         show_task_exception(io, t)
     end
@@ -395,7 +395,7 @@ function _show_default(io::IO, @nospecialize(x))
     show(io, inferencebarrier(t))
     print(io, '(')
     nf = nfields(x)
-    nb = sizeof(x)
+    nb = sizeof(x)::Int
     if nf != 0 || nb == 0
         if !show_circular(io, x)
             recur_io = IOContext(io, Pair{Symbol,Any}(:SHOWN_SET, x),
@@ -1077,7 +1077,7 @@ const uni_ops = Set{Symbol}([:(+), :(-), :(!), :(¬), :(~), :(<:), :(>:), :(√)
 const expr_infix_wide = Set{Symbol}([
     :(=), :(+=), :(-=), :(*=), :(/=), :(\=), :(^=), :(&=), :(|=), :(÷=), :(%=), :(>>>=), :(>>=), :(<<=),
     :(.=), :(.+=), :(.-=), :(.*=), :(./=), :(.\=), :(.^=), :(.&=), :(.|=), :(.÷=), :(.%=), :(.>>>=), :(.>>=), :(.<<=),
-    :(&&), :(||), :(<:), :($=), :(⊻=), :(>:)])
+    :(&&), :(||), :(<:), :($=), :(⊻=), :(>:), :(-->)])
 const expr_infix = Set{Symbol}([:(:), :(->), Symbol("::")])
 const expr_infix_any = union(expr_infix, expr_infix_wide)
 const expr_calls  = Dict(:call => ('(',')'), :calldecl => ('(',')'),

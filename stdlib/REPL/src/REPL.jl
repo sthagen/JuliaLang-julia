@@ -985,7 +985,7 @@ function setup_interface(
         # special)
         on_done = respond(repl, julia_prompt) do line
             Expr(:call, :(Base.repl_cmd),
-                :(Base.cmd_gen($(Base.shell_parse(line)[1]))),
+                :(Base.cmd_gen($(Base.shell_parse(line::String)[1]))),
                 outstream(repl))
         end)
 
@@ -1007,7 +1007,8 @@ function setup_interface(
             end
             hist_from_file(hp, f, hist_path)
         catch
-            print_response(repl, (catch_stack(),true), true, hascolor(repl))
+            # use REPL.hascolor to avoid using the local variable with the same name
+            print_response(repl, (catch_stack(),true), true, REPL.hascolor(repl))
             println(outstream(repl))
             @info "Disabling history file for this session"
             repl.history_file = false

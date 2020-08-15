@@ -6,8 +6,6 @@
 
 @nospecialize
 
-const AbstractEvalConstant = Const
-
 const _NAMEDTUPLE_NAME = NamedTuple.body.body.name
 
 const INT_INF = typemax(Int) # integer infinity
@@ -767,7 +765,7 @@ function getfield_tfunc(@nospecialize(s00), @nospecialize(name))
                 if (fld == TYPENAME_NAME_FIELDINDEX ||
                     fld == TYPENAME_MODULE_FIELDINDEX ||
                     fld == TYPENAME_WRAPPER_FIELDINDEX)
-                    return AbstractEvalConstant(getfield(sv, fld))
+                    return Const(getfield(sv, fld))
                 end
             end
             if isa(sv, Module) && isa(nv, Symbol)
@@ -777,7 +775,7 @@ function getfield_tfunc(@nospecialize(s00), @nospecialize(name))
                 return Bottom
             end
             if (isa(sv, SimpleVector) || !ismutable(sv)) && isdefined(sv, nv)
-                return AbstractEvalConstant(getfield(sv, nv))
+                return Const(getfield(sv, nv))
             end
         end
         s = typeof(sv)
@@ -1262,7 +1260,7 @@ function tuple_tfunc(atypes::Vector{Any})
         end
     end
     if all_are_const
-        return Const(tuple(Any[atypes[i].val for i in 1:length(atypes)]...))
+        return Const(ntuple(i -> atypes[i].val, length(atypes)))
     end
     params = Vector{Any}(undef, length(atypes))
     anyinfo = false
@@ -1553,7 +1551,7 @@ end
 # TODO: this function is a very buggy and poor model of the return_type function
 # since abstract_call_gf_by_type is a very inaccurate model of _method and of typeinf_type,
 # while this assumes that it is an absolutely precise and accurate and exact model of both
-function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, vtypes::VarTable, sv::InferenceState)
+function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, sv::InferenceState)
     if length(argtypes) == 3
         tt = argtypes[3]
         if isa(tt, Const) || (isType(tt) && !has_free_typevars(tt))
@@ -1566,7 +1564,7 @@ function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, v
                     if contains_is(argtypes_vec, Union{})
                         return Const(Union{})
                     end
-                    rt = abstract_call(interp, nothing, argtypes_vec, vtypes, sv, -1).rt
+                    rt = abstract_call(interp, nothing, argtypes_vec, sv, -1).rt
                     if isa(rt, Const)
                         # output was computed to be constant
                         return Const(typeof(rt.val))

@@ -600,12 +600,12 @@ Value *LateLowerGCFrame::MaybeExtractScalar(State &S, std::pair<Value*,int> ValE
 std::vector<Value*> LateLowerGCFrame::MaybeExtractVector(State &S, Value *BaseVec, Instruction *InsertBefore) {
     auto Numbers = NumberAllBase(S, BaseVec);
     std::vector<Value*> V{Numbers.size()};
-    Value *V_null = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
+    Value *V_rnull = ConstantPointerNull::get(cast<PointerType>(T_prjlvalue));
     for (unsigned i = 0; i < V.size(); ++i) {
         if (Numbers[i] >= 0)
             V[i] = GetPtrForNumber(S, Numbers[i], InsertBefore);
         else
-            V[i] = V_null;
+            V[i] = V_rnull;
     }
     return V;
 }
@@ -1124,12 +1124,21 @@ static bool isLoadFromConstGV(LoadInst *LI)
 {
     // We only emit single slot GV in codegen
     // but LLVM global merging can change the pointer operands to GEPs/bitcasts
-    if (!isa<GlobalVariable>(LI->getPointerOperand()->stripInBoundsOffsets()))
-        return false;
-    MDNode *TBAA = LI->getMetadata(LLVMContext::MD_tbaa);
-    if (isTBAA(TBAA, {"jtbaa_const"}))
-        return true;
+    if (auto gv = dyn_cast<GlobalVariable>(LI->getPointerOperand()->stripInBoundsOffsets())) {
+        MDNode *TBAA = LI->getMetadata(LLVMContext::MD_tbaa);
+        if (isTBAA(TBAA, {"jtbaa_const"}) || gv->getMetadata("julia.constgv")) {
+            return true;
+        }
+    }
     return false;
+}
+
+static uint64_t getLoadValueAlign(LoadInst *LI)
+{
+    MDNode *md = LI->getMetadata(LLVMContext::MD_align);
+    if (!md)
+        return 1;
+    return mdconst::extract<ConstantInt>(md->getOperand(0))->getLimitedValue();
 }
 
 static bool LooksLikeFrameRef(Value *V) {
@@ -1559,7 +1568,7 @@ static Value *ExtractScalar(Value *V, Type *VTy, bool isptr, ArrayRef<unsigned> 
         for (unsigned j = 0; j < Idxs.size(); ++j) {
             IdxList[j + 1] = ConstantInt::get(T_int32, Idxs[j]);
         }
-        Value *GEP = irbuilder.CreateGEP(VTy, V, IdxList);
+        Value *GEP = irbuilder.CreateInBoundsGEP(VTy, V, IdxList);
         Type *T = GetElementPtrInst::getIndexedType(VTy, IdxList);
         assert(T->isPointerTy());
         V = irbuilder.CreateAlignedLoad(T, GEP, sizeof(void*));
@@ -1975,7 +1984,7 @@ Value *LateLowerGCFrame::EmitTagPtr(IRBuilder<> &builder, Type *T, Value *V)
     assert(T == T_size || isa<PointerType>(T));
     auto TV = cast<PointerType>(V->getType());
     auto cast = builder.CreateBitCast(V, T->getPointerTo(TV->getAddressSpace()));
-    return builder.CreateGEP(T, cast, ConstantInt::get(T_size, -1));
+    return builder.CreateInBoundsGEP(T, cast, ConstantInt::get(T_size, -1));
 }
 
 Value *LateLowerGCFrame::EmitLoadTag(IRBuilder<> &builder, Value *V)
@@ -2105,11 +2114,54 @@ bool LateLowerGCFrame::CleanupIR(Function &F, State *S) {
                     });
                 newI->takeName(CI);
 
+                // LLVM alignment/bit check is not happy about addrspacecast and refuse
+                // to remove write barrier because of it.
+                // We pretty much only load using `T_size` so try our best to strip
+                // as many cast as possible.
+#if JL_LLVM_VERSION >= 100000
+                auto tag = CI->getArgOperand(2)->stripPointerCastsAndAliases();
+#else
+                auto tag = CI->getArgOperand(2)->stripPointerCasts();
+#endif
+                if (auto C = dyn_cast<ConstantExpr>(tag)) {
+                    if (C->getOpcode() == Instruction::IntToPtr) {
+                        tag = C->getOperand(0);
+                    }
+                }
+                else if (auto LI = dyn_cast<LoadInst>(tag)) {
+                    // Make sure the load is correctly marked as aligned
+                    // since LLVM might have removed them.
+                    // We can't do this in general since the load might not be
+                    // a type in other branches.
+                    // However, it should be safe for us to do this on const globals
+                    // which should be the important cases as well.
+                    if (isLoadFromConstGV(LI) && getLoadValueAlign(LI) < 16) {
+                        Type *T_int64 = Type::getInt64Ty(LI->getContext());
+                        auto op = ConstantAsMetadata::get(ConstantInt::get(T_int64, 16));
+                        LI->setMetadata(LLVMContext::MD_align,
+                                        MDNode::get(LI->getContext(), { op }));
+                    }
+                }
+                // As a last resort, if we didn't manage to strip down the tag
+                // for LLVM, emit an alignment assumption.
+                auto tag_type = tag->getType();
+                if (tag_type->isPointerTy()) {
+                    auto &DL = CI->getModule()->getDataLayout();
+#if JL_LLVM_VERSION >= 100000
+                    auto align = tag->getPointerAlignment(DL).valueOrOne().value();
+#else
+                    auto align = tag->getPointerAlignment(DL);
+#endif
+                    if (align < 16) {
+                        // On 5 <= LLVM < 12, it is illegal to call this on
+                        // non-integral pointer. This relies on stripping the
+                        // non-integralness from datalayout before this pass
+                        builder.CreateAlignmentAssumption(DL, tag, 16);
+                    }
+                }
                 // Set the tag.
                 StoreInst *store = builder.CreateAlignedStore(
-                    CI->getArgOperand(2),
-                    EmitTagPtr(builder, T_prjlvalue, newI),
-                    sizeof(size_t));
+                    tag, EmitTagPtr(builder, tag_type, newI), sizeof(size_t));
                 store->setOrdering(AtomicOrdering::Unordered);
                 store->setMetadata(LLVMContext::MD_tbaa, tbaa_tag);
 
@@ -2160,7 +2212,7 @@ bool LateLowerGCFrame::CleanupIR(Function &F, State *S) {
                 IRBuilder<> Builder (CI);
                 for (; arg_it != CI->arg_end(); ++arg_it) {
                     Builder.CreateAlignedStore(*arg_it,
-                            Builder.CreateGEP(T_prjlvalue, Frame, ConstantInt::get(T_int32, slot++)),
+                            Builder.CreateInBoundsGEP(T_prjlvalue, Frame, ConstantInt::get(T_int32, slot++)),
                             sizeof(void*));
                 }
                 ReplacementArgs.push_back(nframeargs == 0 ?
