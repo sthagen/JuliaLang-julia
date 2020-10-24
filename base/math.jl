@@ -121,7 +121,7 @@ julia> evalpoly(2, (1, 2, 3))
 """
 function evalpoly(x, p::Tuple)
     if @generated
-        N = length(p.parameters)
+        N = length(p.parameters::Core.SimpleVector)
         ex = :(p[end])
         for i in N-1:-1:1
             ex = :(muladd(x, $ex, p[$i]))
@@ -898,6 +898,8 @@ end
     end
     z
 end
+@inline ^(x::Float16, y::Float16) = Float16(Float32(x)^Float32(y))  # TODO: optimize
+
 @inline function ^(x::Float64, y::Integer)
     y == -1 && return inv(x)
     y == 0 && return one(x)

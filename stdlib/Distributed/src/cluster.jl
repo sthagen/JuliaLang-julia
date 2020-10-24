@@ -99,7 +99,7 @@ mutable struct Worker
     add_msgs::Array{Any,1}
     gcflag::Bool
     state::WorkerState
-    c_state::Condition      # wait for state changes
+    c_state::Event          # wait for state changes
     ct_time::Float64        # creation time
     conn_func::Any          # used to setup connections lazily
 
@@ -133,7 +133,7 @@ mutable struct Worker
         if haskey(map_pid_wrkr, id)
             return map_pid_wrkr[id]
         end
-        w=new(id, [], [], false, W_CREATED, Condition(), time(), conn_func)
+        w=new(id, [], [], false, W_CREATED, Event(), time(), conn_func)
         w.initialized = Event()
         register_worker(w)
         w
@@ -144,7 +144,7 @@ end
 
 function set_worker_state(w, state)
     w.state = state
-    notify(w.c_state; all=true)
+    notify(w.c_state)
 end
 
 function check_worker_state(w::Worker)
@@ -189,7 +189,7 @@ function wait_for_conn(w)
         timeout =  worker_timeout() - (time() - w.ct_time)
         timeout <= 0 && error("peer $(w.id) has not connected to $(myid())")
 
-        @async (sleep(timeout); notify(w.c_state; all=true))
+        @async (sleep(timeout); notify(w.c_state))
         wait(w.c_state)
         w.state === W_CREATED && error("peer $(w.id) didn't connect to $(myid()) within $timeout seconds")
     end
@@ -516,7 +516,7 @@ end
 default_addprocs_params() = Dict{Symbol,Any}(
     :topology => :all_to_all,
     :dir      => pwd(),
-    :exename  => joinpath(Sys.BINDIR, julia_exename()),
+    :exename  => joinpath(Sys.BINDIR::String, julia_exename()),
     :exeflags => ``,
     :enable_threaded_blas => false,
     :lazy => true)
@@ -654,10 +654,10 @@ function create_worker(manager, wconfig)
         end
     end
 
-    all_locs = map(x -> isa(x, Worker) ?
-                   (something(x.config.connect_at, ()), x.id) :
-                   ((), x.id, true),
-                   join_list)
+    all_locs = mapany(x -> isa(x, Worker) ?
+                      (something(x.config.connect_at, ()), x.id) :
+                      ((), x.id, true),
+                      join_list)
     send_connection_hdr(w, true)
     enable_threaded_blas = something(wconfig.enable_threaded_blas, false)
     join_message = JoinPGRPMsg(w.id, all_locs, PGRP.topology, enable_threaded_blas, isclusterlazy())
@@ -765,7 +765,7 @@ let next_pid = 2    # 1 is reserved for the client (always)
 end
 
 mutable struct ProcessGroup
-    name::AbstractString
+    name::String
     workers::Array{Any,1}
     refs::Dict{RRID,Any}                  # global references
     topology::Symbol
@@ -1024,8 +1024,8 @@ end
 function _rmprocs(pids, waitfor)
     lock(worker_lock)
     try
-        rmprocset = []
-        for p in vcat(pids...)
+        rmprocset = Union{LocalProcess, Worker}[]
+        for p in pids
             if p == 1
                 @warn "rmprocs: process 1 not removed"
             else
