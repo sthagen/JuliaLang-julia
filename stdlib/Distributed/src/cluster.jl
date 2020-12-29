@@ -15,7 +15,7 @@ abstract type ClusterManager end
 Type used by [`ClusterManager`](@ref)s to control workers added to their clusters. Some fields
 are used by all cluster managers to access a host:
   * `io` -- the connection used to access the worker (a subtype of `IO` or `Nothing`)
-  * `host` -- the host address (either an `AbstractString` or `Nothing`)
+  * `host` -- the host address (either a `String` or `Nothing`)
   * `port` -- the port on the host used to connect to the worker (either an `Int` or `Nothing`)
 
 Some are used by the cluster manager to add workers to an already-initialized host:
@@ -99,7 +99,7 @@ mutable struct Worker
     add_msgs::Array{Any,1}
     gcflag::Bool
     state::WorkerState
-    c_state::Event          # wait for state changes
+    c_state::Condition      # wait for state changes
     ct_time::Float64        # creation time
     conn_func::Any          # used to setup connections lazily
 
@@ -133,7 +133,7 @@ mutable struct Worker
         if haskey(map_pid_wrkr, id)
             return map_pid_wrkr[id]
         end
-        w=new(id, [], [], false, W_CREATED, Event(), time(), conn_func)
+        w=new(id, [], [], false, W_CREATED, Condition(), time(), conn_func)
         w.initialized = Event()
         register_worker(w)
         w
@@ -144,7 +144,7 @@ end
 
 function set_worker_state(w, state)
     w.state = state
-    notify(w.c_state)
+    notify(w.c_state; all=true)
 end
 
 function check_worker_state(w::Worker)
@@ -189,7 +189,7 @@ function wait_for_conn(w)
         timeout =  worker_timeout() - (time() - w.ct_time)
         timeout <= 0 && error("peer $(w.id) has not connected to $(myid())")
 
-        @async (sleep(timeout); notify(w.c_state))
+        @async (sleep(timeout); notify(w.c_state; all=true))
         wait(w.c_state)
         w.state === W_CREATED && error("peer $(w.id) didn't connect to $(myid()) within $timeout seconds")
     end
@@ -448,7 +448,7 @@ function addprocs(manager::ClusterManager; kwargs...)
 end
 
 function addprocs_locked(manager::ClusterManager; kwargs...)
-    params = merge(default_addprocs_params(), Dict{Symbol,Any}(kwargs))
+    params = merge(default_addprocs_params(manager), Dict{Symbol,Any}(kwargs))
     topology(Symbol(params[:topology]))
 
     if PGRP.topology !== :all_to_all
@@ -513,6 +513,14 @@ function set_valid_processes(plist::Array{Int})
     end
 end
 
+"""
+    default_addprocs_params(mgr::ClusterManager) -> Dict{Symbol, Any}
+
+Implemented by cluster managers. The default keyword parameters passed when calling
+`addprocs(mgr)`. The minimal set of options is available by calling
+`default_addprocs_params()`
+"""
+default_addprocs_params(::ClusterManager) = default_addprocs_params()
 default_addprocs_params() = Dict{Symbol,Any}(
     :topology => :all_to_all,
     :dir      => pwd(),
@@ -869,13 +877,13 @@ Get the number of available worker processes. This is one less than [`nprocs()`]
 
 # Examples
 ```julia-repl
-\$ julia -p 5
+\$ julia -p 2
 
 julia> nprocs()
-6
+3
 
 julia> nworkers()
-5
+2
 ```
 """
 function nworkers()
@@ -890,7 +898,7 @@ Return a list of all process identifiers, including pid 1 (which is not included
 
 # Examples
 ```julia-repl
-\$ julia -p 5
+\$ julia -p 2
 
 julia> procs()
 3-element Array{Int64,1}:
@@ -952,7 +960,7 @@ Return a list of all worker process identifiers.
 
 # Examples
 ```julia-repl
-\$ julia -p 5
+\$ julia -p 2
 
 julia> workers()
 2-element Array{Int64,1}:

@@ -595,9 +595,16 @@ end
     @test -2//3 * 0x1 == 0x1 * -2//3 == -2//3
 end
 
-@testset "ispow2" begin
+@testset "ispow2 and iseven/isodd" begin
     @test ispow2(4//1)
     @test ispow2(1//8)
     @test !ispow2(3//8)
     @test !ispow2(0//1)
+    @test iseven(4//1) && !isodd(4//1)
+    @test !iseven(3//1) && isodd(3//1)
+    @test !iseven(3//8) && !isodd(3//8)
+end
+
+@testset "checked_den with different integer types" begin
+    @test Base.checked_den(Int8(4), Int32(8)) == Base.checked_den(Int32(4), Int32(8))
 end

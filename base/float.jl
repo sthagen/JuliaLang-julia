@@ -78,10 +78,34 @@ for T in (Float16, Float32, Float64)
     @eval exponent_bits(::Type{$T}) = $(sizeof(T)*8 - significand_bits(T) - 1)
     @eval exponent_bias(::Type{$T}) = $(Int(exponent_one(T) >> significand_bits(T)))
     # maximum float exponent
-    @eval exponent_max(::Type{$T}) = $(Int(exponent_mask(T) >> significand_bits(T)) - exponent_bias(T))
+    @eval exponent_max(::Type{$T}) = $(Int(exponent_mask(T) >> significand_bits(T)) - exponent_bias(T) - 1)
     # maximum float exponent without bias
     @eval exponent_raw_max(::Type{$T}) = $(Int(exponent_mask(T) >> significand_bits(T)))
 end
+
+"""
+    exponent_max(T)
+
+Maximum [`exponent`](@ref) value for a floating point number of type `T`.
+
+# Examples
+```jldoctest
+julia> Base.exponent_max(Float64)
+1023
+```
+
+Note, `exponent_max(T) + 1` is a possible value of the exponent field
+with bias, which might be used as sentinel value for `Inf` or `NaN`.
+"""
+function exponent_max end
+
+"""
+    exponent_raw_max(T)
+
+Maximum value of the [`exponent`](@ref) field for a floating point number of type `T` without bias,
+i.e. the maximum integer value representable by [`exponent_bits(T)`](@ref) bits.
+"""
+function exponent_raw_max end
 
 ## conversions to floating-point ##
 
@@ -447,7 +471,7 @@ Test whether a number value is a NaN, an indeterminate value which is neither an
 nor a finite number ("not a number").
 """
 isnan(x::AbstractFloat) = (x != x)::Bool
-isnan(x::Real) = false
+isnan(x::Number) = false
 
 isfinite(x::AbstractFloat) = x - x == 0
 isfinite(x::Real) = decompose(x)[3] != 0
@@ -460,17 +484,133 @@ Test whether a number is infinite.
 """
 isinf(x::Real) = !isnan(x) & !isfinite(x)
 
-## hashing small, built-in numeric types ##
+const hx_NaN = hash_uint64(reinterpret(UInt64, NaN))
+let Tf = Float64, Tu = UInt64, Ti = Int64
+    @eval function hash(x::$Tf, h::UInt)
+        # see comments on trunc and hash(Real, UInt)
+        if $(Tf(typemin(Ti))) <= x < $(Tf(typemax(Ti)))
+            xi = fptosi($Ti, x)
+            if isequal(xi, x)
+                return hash(xi, h)
+            end
+        elseif $(Tf(typemin(Tu))) <= x < $(Tf(typemax(Tu)))
+            xu = fptoui($Tu, x)
+            if isequal(xu, x)
+                return hash(xu, h)
+            end
+        elseif isnan(x)
+            return hx_NaN ⊻ h # NaN does not have a stable bit pattern
+        end
+        return hash_uint64(bitcast(UInt64, x)) - 3h
+    end
+end
 
-hx(a::UInt64, b::Float64, h::UInt) = hash_uint64((3a + reinterpret(UInt64,b)) - h)
-const hx_NaN = hx(UInt64(0), NaN, UInt(0  ))
-
-hash(x::UInt64,  h::UInt) = hx(x, Float64(x), h)
-hash(x::Int64,   h::UInt) = hx(reinterpret(UInt64, abs(x)), Float64(x), h)
-hash(x::Float64, h::UInt) = isnan(x) ? (hx_NaN ⊻ h) : hx(fptoui(UInt64, abs(x)), x, h)
-
-hash(x::Union{Bool,Int8,UInt8,Int16,UInt16,Int32,UInt32}, h::UInt) = hash(Int64(x), h)
 hash(x::Float32, h::UInt) = hash(Float64(x), h)
+hash(x::Float16, h::UInt) = hash(Float64(x), h)
+
+## generic hashing for rational values ##
+
+function hash(x::Real, h::UInt)
+    # decompose x as num*2^pow/den
+    num, pow, den = decompose(x)
+
+    # handle special values
+    num == 0 && den == 0 && return hash(NaN, h)
+    num == 0 && return hash(ifelse(den > 0, 0.0, -0.0), h)
+    den == 0 && return hash(ifelse(num > 0, Inf, -Inf), h)
+
+    # normalize decomposition
+    if den < 0
+        num = -num
+        den = -den
+    end
+    z = trailing_zeros(num)
+    if z != 0
+        num >>= z
+        pow += z
+    end
+    z = trailing_zeros(den)
+    if z != 0
+        den >>= z
+        pow -= z
+    end
+
+    # handle values representable as Int64, UInt64, Float64
+    if den == 1
+        left = ndigits0z(num,2) + pow
+        right = trailing_zeros(num) + pow
+        if -1074 <= right
+            if 0 <= right && left <= 64
+                left <= 63                     && return hash(Int64(num) << Int(pow), h)
+                signbit(num) == signbit(den)   && return hash(UInt64(num) << Int(pow), h)
+            end # typemin(Int64) handled by Float64 case
+            left <= 1024 && left - right <= 53 && return hash(ldexp(Float64(num),pow), h)
+        end
+    end
+
+    # handle generic rational values
+    h = hash_integer(den, h)
+    h = hash_integer(pow, h)
+    h = hash_integer(num, h)
+    return h
+end
+
+#=
+`decompose(x)`: non-canonical decomposition of rational values as `num*2^pow/den`.
+
+The decompose function is the point where rational-valued numeric types that support
+hashing hook into the hashing protocol. `decompose(x)` should return three integer
+values `num, pow, den`, such that the value of `x` is mathematically equal to
+
+    num*2^pow/den
+
+The decomposition need not be canonical in the sense that it just needs to be *some*
+way to express `x` in this form, not any particular way – with the restriction that
+`num` and `den` may not share any odd common factors. They may, however, have powers
+of two in common – the generic hashing code will normalize those as necessary.
+
+Special values:
+
+ - `x` is zero: `num` should be zero and `den` should have the same sign as `x`
+ - `x` is infinite: `den` should be zero and `num` should have the same sign as `x`
+ - `x` is not a number: `num` and `den` should both be zero
+=#
+
+decompose(x::Integer) = x, 0, 1
+
+function decompose(x::Float16)::NTuple{3,Int}
+    isnan(x) && return 0, 0, 0
+    isinf(x) && return ifelse(x < 0, -1, 1), 0, 0
+    n = reinterpret(UInt16, x)
+    s = (n & 0x03ff) % Int16
+    e = ((n & 0x7c00) >> 10) % Int
+    s |= Int16(e != 0) << 10
+    d = ifelse(signbit(x), -1, 1)
+    s, e - 25 + (e == 0), d
+end
+
+function decompose(x::Float32)::NTuple{3,Int}
+    isnan(x) && return 0, 0, 0
+    isinf(x) && return ifelse(x < 0, -1, 1), 0, 0
+    n = reinterpret(UInt32, x)
+    s = (n & 0x007fffff) % Int32
+    e = ((n & 0x7f800000) >> 23) % Int
+    s |= Int32(e != 0) << 23
+    d = ifelse(signbit(x), -1, 1)
+    s, e - 150 + (e == 0), d
+end
+
+function decompose(x::Float64)::Tuple{Int64, Int, Int}
+    isnan(x) && return 0, 0, 0
+    isinf(x) && return ifelse(x < 0, -1, 1), 0, 0
+    n = reinterpret(UInt64, x)
+    s = (n & 0x000fffffffffffff) % Int64
+    e = ((n & 0x7ff0000000000000) >> 52) % Int
+    s |= Int64(e != 0) << 52
+    d = ifelse(signbit(x), -1, 1)
+    s, e - 1075 + (e == 0), d
+end
+
 
 """
     precision(num::AbstractFloat)
@@ -623,6 +763,8 @@ function issubnormal(x::T) where {T<:IEEEFloat}
 end
 
 ispow2(x::AbstractFloat) = !iszero(x) && frexp(x)[1] == 0.5
+iseven(x::AbstractFloat) = isinteger(x) && (abs(x) > maxintfloat(x) || iseven(Integer(x)))
+isodd(x::AbstractFloat) = isinteger(x) && abs(x) ≤ maxintfloat(x) && isodd(Integer(x))
 
 @eval begin
     typemin(::Type{Float16}) = $(bitcast(Float16, 0xfc00))

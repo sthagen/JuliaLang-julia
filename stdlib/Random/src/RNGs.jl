@@ -321,11 +321,11 @@ function make_seed()
         println(stderr,
                 "Entropy pool not available to seed RNG; using ad-hoc entropy sources.")
         seed = reinterpret(UInt64, time())
-        seed = hash(seed, UInt64(getpid()))
+        seed = hash(seed, getpid() % UInt)
         try
             seed = hash(seed, parse(UInt64,
                                     read(pipeline(`ifconfig`, `sha1sum`), String)[1:40],
-                                    base = 16))
+                                    base = 16) % UInt)
         catch
         end
         return make_seed(seed)
@@ -509,7 +509,7 @@ Base.getindex(a::UnsafeView, i::Int) = unsafe_load(a.ptr, i)
 Base.setindex!(a::UnsafeView, x, i::Int) = unsafe_store!(a.ptr, x, i)
 Base.pointer(a::UnsafeView) = a.ptr
 Base.size(a::UnsafeView) = (a.len,)
-Base.elsize(::UnsafeView{T}) where {T} = sizeof(T)
+Base.elsize(::Type{UnsafeView{T}}) where {T} = sizeof(T)
 
 # this is essentially equivalent to rand!(r, ::AbstractArray{Float64}, I) above, but due to
 # optimizations which can't be done currently when working with pointers, we have to re-order

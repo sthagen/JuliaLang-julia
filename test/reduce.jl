@@ -387,6 +387,38 @@ A = circshift(reshape(1:24,2,3,4), (0,1,1))
     end
 end
 
+# findmin, findmax, argmin, argmax
+
+@testset "findmin(f, domain)" begin
+    @test findmin(-, 1:10) == (-10, 10)
+    @test findmin(identity, [1, 2, 3, missing]) === (missing, missing)
+    @test findmin(identity, [1, NaN, 3, missing]) === (missing, missing)
+    @test findmin(identity, [1, missing, NaN, 3]) === (missing, missing)
+    @test findmin(identity, [1, NaN, 3]) === (NaN, NaN)
+    @test findmin(identity, [1, 3, NaN]) === (NaN, NaN)
+    @test all(findmin(cos, 0:π/2:2π) .≈ (-1.0, π))
+end
+
+@testset "findmax(f, domain)" begin
+    @test findmax(-, 1:10) == (-1, 1)
+    @test findmax(identity, [1, 2, 3, missing]) === (missing, missing)
+    @test findmax(identity, [1, NaN, 3, missing]) === (missing, missing)
+    @test findmax(identity, [1, missing, NaN, 3]) === (missing, missing)
+    @test findmax(identity, [1, NaN, 3]) === (NaN, NaN)
+    @test findmax(identity, [1, 3, NaN]) === (NaN, NaN)
+    @test findmax(cos, 0:π/2:2π) == (1.0, 0.0)
+end
+
+@testset "argmin(f, domain)" begin
+    @test argmin(-, 1:10) == 10
+    @test argmin(sum, Iterators.product(1:5, 1:5)) == (1, 1)
+end
+
+@testset "argmax(f, domain)" begin
+    @test argmax(-, 1:10) == 1
+    @test argmax(sum, Iterators.product(1:5, 1:5)) == (5, 5)
+end
+
 # any & all
 
 @test @inferred any([]) == false
@@ -519,6 +551,12 @@ struct NonFunctionIsZero end
 @test count(NonFunctionIsZero(), []) == 0
 @test count(NonFunctionIsZero(), [0]) == 1
 @test count(NonFunctionIsZero(), [1]) == 0
+
+@test count(Iterators.repeated(true, 3), init=0x04) === 0x07
+@test count(!=(2), Iterators.take(1:7, 3), init=Int32(0)) === Int32(2)
+@test count(identity, [true, false], init=Int8(5)) === Int8(6)
+@test count(!, [true false; false true], dims=:, init=Int16(0)) === Int16(2)
+@test isequal(count(identity, [true false; false true], dims=2, init=UInt(4)), reshape(UInt[5, 5], 2, 1))
 
 ## cumsum, cummin, cummax
 
