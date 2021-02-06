@@ -149,7 +149,10 @@ for l in (Threads.SpinLock(), ReentrantLock())
     @test get_finalizers_inhibited() == 1
     GC.enable_finalizers(true)
     @test get_finalizers_inhibited() == 0
-    @test_warn "WARNING: GC finalizers already enabled on this thread." GC.enable_finalizers(true)
+    if ccall(:jl_is_debugbuild, Cint, ()) != 0
+        # Note this warning only exists in debug builds
+        @test_warn "WARNING: GC finalizers already enabled on this thread." GC.enable_finalizers(true)
+    end
 
     @test lock(l) === nothing
     @test try unlock(l) finally end === nothing
@@ -227,6 +230,27 @@ v11801, t11801 = @timed sin(1)
 @test isa(t11801,Real) && t11801 >= 0
 
 @test names(@__MODULE__, all = true) == names_before_timing
+
+# PR #39133, ensure that @time evaluates in the same scope
+function time_macro_scope()
+    try # try/throw/catch bypasses printing
+        @time (time_macro_local_var = 1; throw("expected"))
+        return time_macro_local_var
+    catch ex
+        ex === "expected" || rethrow()
+    end
+end
+@test time_macro_scope() == 1
+
+function timev_macro_scope()
+    try # try/throw/catch bypasses printing
+        @timev (time_macro_local_var = 1; throw("expected"))
+        return time_macro_local_var
+    catch ex
+        ex === "expected" || rethrow()
+    end
+end
+@test timev_macro_scope() == 1
 
 # interactive utilities
 

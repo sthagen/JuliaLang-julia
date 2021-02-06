@@ -165,9 +165,8 @@ precompile_test_harness(false) do dir
 
               let some_method = which(Base.include, (Module, String,))
                     # global const some_method // FIXME: support for serializing a direct reference to an external Method not implemented
-                  global const some_linfo =
-                      ccall(:jl_specializations_get_linfo, Ref{Core.MethodInstance}, (Any, Any, Any, UInt),
-                          some_method, Tuple{typeof(Base.include), Module, String}, Core.svec(), typemax(UInt))
+                  global const some_linfo = Core.Compiler.specialize_method(some_method,
+                      Tuple{typeof(Base.include), Module, String}, Core.svec())
               end
 
               g() = override(1.0)
@@ -347,9 +346,7 @@ precompile_test_harness(false) do dir
                 Val{nothing}},
             0:25)
         some_method = which(Base.include, (Module, String,))
-        some_linfo =
-                ccall(:jl_specializations_get_linfo, Ref{Core.MethodInstance}, (Any, Any, Any, UInt),
-                    some_method, Tuple{typeof(Base.include), Module, String}, Core.svec(), typemax(UInt))
+        some_linfo = Core.Compiler.specialize_method(some_method, Tuple{typeof(Base.include), Module, String}, Core.svec())
         @test Foo.some_linfo::Core.MethodInstance === some_linfo
 
         ft = Base.datatype_fieldtypes
@@ -845,4 +842,30 @@ precompile_test_harness("Issue #38312") do load_path
     @test pointer_from_objref((@eval (using Foo38312; Foo38312)).TheType) ===
           pointer_from_objref(eval(Meta.parse(TheType))) ===
           pointer_from_objref((@eval (using Bar38312; Bar38312)).TheType)
+end
+
+precompile_test_harness("Opaque Closure") do load_path
+    write(joinpath(load_path, "OCPrecompile.jl"),
+        """
+        module OCPrecompile
+        using Base.Experimental: @opaque
+        f(x) = @opaque y->x+y
+        end
+        """)
+    Base.compilecache(Base.PkgId("OCPrecompile"))
+    f = (@eval (using OCPrecompile; OCPrecompile)).f
+    @test Base.invokelatest(f, 1)(2) == 3
+end
+
+# issue #39405
+precompile_test_harness("Renamed Imports") do load_path
+    write(joinpath(load_path, "RenameImports.jl"),
+          """
+          module RenameImports
+          import Base.Experimental as ex
+          test() = ex
+          end
+          """)
+    Base.compilecache(Base.PkgId("RenameImports"))
+    @test (@eval (using RenameImports; RenameImports.test())) isa Module
 end

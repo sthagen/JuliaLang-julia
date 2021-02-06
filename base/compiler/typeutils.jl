@@ -5,7 +5,7 @@
 #####################
 
 function rewrap(@nospecialize(t), @nospecialize(u))
-    if isa(t, TypeVar) || isa(t, Type)
+    if isa(t, TypeVar) || isa(t, Type) || isa(t, Core.TypeofVararg)
         return rewrap_unionall(t, u)
     end
     return t
@@ -34,7 +34,9 @@ end
 
 function has_nontrivial_const_info(@nospecialize t)
     isa(t, PartialStruct) && return true
-    return isa(t, Const) && !isdefined(typeof(t.val), :instance) && !(isa(t.val, Type) && hasuniquerep(t.val))
+    isa(t, Const) || return false
+    val = t.val
+    return !isdefined(typeof(val), :instance) && !(isa(val, Type) && hasuniquerep(val))
 end
 
 # Subtyping currently intentionally answers certain queries incorrectly for kind types. For
@@ -47,7 +49,8 @@ argtypes_to_type(argtypes::Array{Any,1}) = Tuple{anymap(widenconst, argtypes)...
 
 function isknownlength(t::DataType)
     isvatuple(t) || return true
-    return length(t.parameters) > 0 && isa(unwrap_unionall(t.parameters[end]).parameters[2], Int)
+    va = t.parameters[end]
+    return isdefined(va, :N) && va.N isa Int
 end
 
 # test if non-Type, non-TypeVar `x` can be used to parameterize a type
@@ -221,4 +224,22 @@ function improvable_via_constant_propagation(@nospecialize(t))
         end
     end
     return false
+end
+
+# convert a Union of Tuple types to a Tuple of Unions
+function unswitchtupleunion(u::Union)
+    ts = uniontypes(u)
+    n = -1
+    for t in ts
+        if t isa DataType && t.name === Tuple.name && !isvarargtype(t.parameters[end])
+            if n == -1
+                n = length(t.parameters)
+            elseif n != length(t.parameters)
+                return u
+            end
+        else
+            return u
+        end
+    end
+    Tuple{Any[ Union{Any[t.parameters[i] for t in ts]...} for i in 1:n ]...}
 end

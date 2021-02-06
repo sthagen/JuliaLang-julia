@@ -454,10 +454,6 @@ CXX_DISABLE_ASSERTION := -DJL_NDEBUG
 DISABLE_ASSERTIONS := -DNDEBUG -DJL_NDEBUG
 endif
 
-ifeq ($(LLVM_ASSERTIONS),0)
-CXX_DISABLE_ASSERTION += -DNDEBUG
-endif
-
 # Compiler specific stuff
 
 ifeq ($(USEMSVC), 1)
@@ -1043,7 +1039,7 @@ endif # SYSTEM_LLVM
 # Windows builds need a little help finding the LLVM libraries for llvm-config
 LLVM_CONFIG_PATH_FIX :=
 ifeq ($(OS),WINNT)
-LLVM_CONFIG_PATH_FIX := PATH="$(PATH):$(build_bindir)"
+LLVM_CONFIG_PATH_FIX := PATH="$(build_bindir):$(PATH)"
 endif
 
 ifeq ($(BUILD_OS),$(OS))
@@ -1177,7 +1173,9 @@ USE_BINARYBUILDER ?= 0
 endif
 
 # Auto-detect triplet once, create different versions that we use as defaults below for each BB install target
-BB_TRIPLET_LIBGFORTRAN_CXXABI := $(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) $(or $(XC_HOST),$(XC_HOST),$(BUILD_MACHINE)) "$(shell $(FC) --version | head -1)" "$(or $(shell echo '\#include <string>' | $(CXX) $(CXXFLAGS) -x c++ -dM -E - | grep _GLIBCXX_USE_CXX11_ABI | awk '{ print $$3 }' ),1)")
+FC_VERSION := $(shell $(FC) --version 2>/dev/null | head -1)
+FC_OR_CC_VERISON := $(or $(FC_VERSION),$(shell $(CC) --version 2>/dev/null | head -1))
+BB_TRIPLET_LIBGFORTRAN_CXXABI := $(shell $(call invoke_python,$(JULIAHOME)/contrib/normalize_triplet.py) $(or $(XC_HOST),$(XC_HOST),$(BUILD_MACHINE)) "$(FC_OR_CC_VERSION)" "$(or $(shell echo '\#include <string>' | $(CXX) $(CXXFLAGS) -x c++ -dM -E - | grep _GLIBCXX_USE_CXX11_ABI | awk '{ print $$3 }' ),1)")
 BB_TRIPLET_LIBGFORTRAN := $(subst $(SPACE),-,$(filter-out cxx%,$(subst -,$(SPACE),$(BB_TRIPLET_LIBGFORTRAN_CXXABI))))
 BB_TRIPLET_CXXABI := $(subst $(SPACE),-,$(filter-out libgfortran%,$(subst -,$(SPACE),$(BB_TRIPLET_LIBGFORTRAN_CXXABI))))
 BB_TRIPLET := $(subst $(SPACE),-,$(filter-out cxx%,$(filter-out libgfortran%,$(subst -,$(SPACE),$(BB_TRIPLET_LIBGFORTRAN_CXXABI)))))
@@ -1200,10 +1198,12 @@ endef
 $(foreach proj,$(BB_PROJECTS),$(eval $(call SET_BB_DEFAULT,$(proj))))
 
 
-
-# Use the Assertions build
-BINARYBUILDER_LLVM_ASSERTS ?= 0
-
+# Warn if the user tries to build something that requires `gfortran` but they don't have it installed.
+ifeq ($(FC_VERSION),)
+ifneq ($(USE_BINARYBUILDER_OPENBLAS)$(USE_BINARYBUILDER_SUITESPARSE),11)
+$(error "Attempting to build OpenBLAS or SuiteSparse without a functioning fortran compiler!")
+endif
+endif
 
 
 # OS specific stuff

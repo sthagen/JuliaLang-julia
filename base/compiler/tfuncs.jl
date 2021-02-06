@@ -543,47 +543,10 @@ function typeof_tfunc(@nospecialize(t))
 end
 add_tfunc(typeof, 1, 1, typeof_tfunc, 0)
 
-function typeassert_type_instance(@nospecialize(v), @nospecialize(t))
-    if isa(v, Const)
-        if !has_free_typevars(t) && !isa(v.val, t)
-            return Bottom
-        end
-        return v
-    elseif isa(v, PartialStruct)
-        has_free_typevars(t) && return v
-        widev = widenconst(v)
-        if widev <: t
-            return v
-        end
-        ti = typeintersect(widev, t)
-        if ti === Bottom
-            return Bottom
-        end
-        @assert widev <: Tuple
-        new_fields = Vector{Any}(undef, length(v.fields))
-        for i = 1:length(new_fields)
-            if isa(v.fields[i], Core.TypeofVararg)
-                new_fields[i] = v.fields[i]
-            else
-                new_fields[i] = typeassert_type_instance(v.fields[i], getfield_tfunc(t, Const(i)))
-                if new_fields[i] === Bottom
-                    return Bottom
-                end
-            end
-        end
-        return tuple_tfunc(new_fields)
-    elseif isa(v, Conditional)
-        if !(Bool <: t)
-            return Bottom
-        end
-        return v
-    end
-    return typeintersect(widenconst(v), t)
-end
 function typeassert_tfunc(@nospecialize(v), @nospecialize(t))
     t = instanceof_tfunc(t)[1]
     t === Any && return v
-    return typeassert_type_instance(v, t)
+    return tmeet(v, t)
 end
 add_tfunc(typeassert, 2, 2, typeassert_tfunc, 4)
 
@@ -695,7 +658,8 @@ function try_compute_fieldidx(typ::DataType, @nospecialize(field))
     if isa(field, Symbol)
         field = fieldindex(typ, field, false)
         field == 0 && return nothing
-    elseif isa(field, Integer)
+    elseif isa(field, Int)
+        # Numerical field name can only be of type `Int`
         max_fields = fieldcount_noerror(typ)
         max_fields === nothing && return nothing
         (1 <= field <= max_fields) || return nothing
@@ -742,7 +706,8 @@ function getfield_nothrow(@nospecialize(s00), @nospecialize(name), @nospecialize
         return false
     end
 
-    s = unwrap_unionall(widenconst(s00))
+    s0 = widenconst(s00)
+    s = unwrap_unionall(s0)
     if isa(s, Union)
         return getfield_nothrow(rewrap(s.a, s00), name, inbounds) &&
             getfield_nothrow(rewrap(s.b, s00), name, inbounds)
@@ -759,6 +724,8 @@ function getfield_nothrow(@nospecialize(s00), @nospecialize(name), @nospecialize
         field = try_compute_fieldidx(s, name.val)
         field === nothing && return false
         field <= s.ninitialized && return true
+        # `try_compute_fieldidx` already check for field index bound.
+        !isvatuple(s) && isbitstype(fieldtype(s0, field)) && return true
     end
 
     return false
@@ -1648,25 +1615,29 @@ function return_type_tfunc(interp::AbstractInterpreter, argtypes::Vector{Any}, s
                     if contains_is(argtypes_vec, Union{})
                         return Const(Union{})
                     end
-                    rt = abstract_call(interp, nothing, argtypes_vec, sv, -1).rt
+                    rt = widenconditional(abstract_call(interp, nothing, argtypes_vec, sv, -1).rt)
                     if isa(rt, Const)
                         # output was computed to be constant
                         return Const(typeof(rt.val))
+                    end
+                    rt = widenconst(rt)
+                    if rt === Bottom || (isconcretetype(rt) && !iskindtype(rt))
+                        # output cannot be improved so it is known for certain
+                        return Const(rt)
+                    elseif !isempty(sv.pclimitations)
+                        # conservatively express uncertainty of this result
+                        # in two ways: both as being a subtype of this, and
+                        # because of LimitedAccuracy causes
+                        return Type{<:rt}
+                    elseif (isa(tt, Const) || isconstType(tt)) &&
+                        (isa(aft, Const) || isconstType(aft))
+                        # input arguments were known for certain
+                        # XXX: this doesn't imply we know anything about rt
+                        return Const(rt)
+                    elseif isType(rt)
+                        return Type{rt}
                     else
-                        rt = widenconst(rt)
-                        if hasuniquerep(rt) || rt === Bottom
-                            # output type was known for certain
-                            return Const(rt)
-                        elseif (isa(tt, Const) || isconstType(tt)) &&
-                            (isa(aft, Const) || isconstType(aft))
-                            # input arguments were known for certain
-                            # XXX: this doesn't imply we know anything about rt
-                            return Const(rt)
-                        elseif isType(rt)
-                            return Type{rt}
-                        else
-                            return Type{<:rt}
-                        end
+                        return Type{<:rt}
                     end
                 end
             end
