@@ -11,8 +11,8 @@ const LIBPATH_list = String[]
 export p7zip
 
 # These get calculated in __init__()
-PATH = Ref("")
-LIBPATH = Ref("")
+const PATH = Ref("")
+const LIBPATH = Ref("")
 artifact_dir = ""
 p7zip_path = ""
 if Sys.iswindows()
@@ -83,8 +83,10 @@ end
 function __init__()
     global artifact_dir = dirname(Sys.BINDIR)
     init_p7zip_path()
-    global PATH[] = dirname(p7zip_path)
+    PATH[] = dirname(p7zip_path)
     push!(PATH_list, PATH[])
+    append!(LIBPATH_list, [joinpath(Sys.BINDIR, Base.LIBDIR, "julia"), joinpath(Sys.BINDIR, Base.LIBDIR)])
+    LIBPATH[] = join(LIBPATH_list, pathsep)
 end
 
 # JLLWrappers API compatibility shims.  Note that not all of these will really make sense.

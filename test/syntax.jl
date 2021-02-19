@@ -2677,4 +2677,52 @@ end
     @test f((b=3, a=4)) == (4, 3)
     @test f((b=3, c=2, a=4)) == (4, 3)
     @test_throws ErrorException f((;))
+
+    # with type annotation
+    let num, den, a, b
+        res = begin (; num::UInt8, den::Float64) = 1 // 2 end
+        @test res === 1 // 2
+        @test num === 0x01
+        @test den === 2.0
+
+        res = begin (; b, a::Bool) = (a=1.0, b=2, c=0x03) end
+        @test res === (a=1.0, b=2, c=0x03)
+        @test b === 2
+        @test a === true
+    end
+
+    @test Meta.isexpr(Meta.@lower(f((; a, b::Int)) = a + b), :error)
 end
+
+# issue #25652
+x25652 = 1
+x25652_2 = let (x25652, _) = (x25652, nothing)
+    x25652 = x25652 + 1
+    x25652
+end
+@test x25652_2 == 2
+@test x25652 == 1
+
+@test let x = x25652
+    x25652 = x+3
+    x25652
+end == 4
+@test let (x,) = (x25652,)
+    x25652 = x+3
+    x25652
+end == 4
+
+@testset "issue #39600" begin
+    A = 1:.5:2
+    @test (!).(1 .< A .< 2) == [true, false, true]
+    @test .!(1 .< A .< 2) == [true, false, true]
+    @test (.!)(1 .< A .< 2) == [true, false, true]
+
+    @test ncalls_in_lowered(:((!).(1 .< A .< 2)), GlobalRef(Base, :materialize)) == 1
+    @test ncalls_in_lowered(:(.!(1 .< A .< 2)), GlobalRef(Base, :materialize)) == 1
+    @test ncalls_in_lowered(:((.!)(1 .< A .< 2)), GlobalRef(Base, :materialize)) == 1
+end
+
+# issue #39705
+@eval f39705(x) = $(Expr(:||)) && x
+@test f39705(1) === false

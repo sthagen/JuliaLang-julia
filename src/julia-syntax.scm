@@ -1221,41 +1221,25 @@
                     (decl?   (cadar binds)))
                 (let ((vname (decl-var (cadar binds))))
                   (loop (cdr binds)
-                        (if (expr-contains-eq vname (caddar binds))
-                            (let ((tmp (make-ssavalue)))
-                              `(scope-block
-                                (block ,@hs
-                                       (= ,tmp ,(caddar binds))
-                                       (scope-block
-                                        (block
-                                         (local-def ,(cadar binds))
-                                         (= ,vname ,tmp)
-                                         ,blk)))))
-                            `(scope-block
-                              (block ,@hs
-                               (local-def ,(cadar binds))
-                               (= ,vname ,(caddar binds))
-                               ,blk))))))
+                        (let ((tmp (make-ssavalue)))
+                          `(block (= ,tmp ,(caddar binds))
+                                  (scope-block
+                                   (block ,@hs
+                                          (local-def ,(cadar binds))
+                                          (= ,vname ,tmp)
+                                          ,blk)))))))
                ;; (a, b, c, ...) = rhs
                ((and (pair? (cadar binds))
                      (eq? (caadar binds) 'tuple))
                 (let ((vars (lhs-vars (cadar binds))))
                   (loop (cdr binds)
-                        (if (expr-contains-p (lambda (x) (memq x vars)) (caddr (car binds)))
-                            ;; use more careful lowering if there are name conflicts. issue #25652
-                            (let ((temp (make-ssavalue)))
-                              `(block
-                                (= ,temp ,(caddr (car binds)))
-                                (scope-block
-                                 (block ,@hs
-                                  ,@(map (lambda (v) `(local-def ,v)) vars)
-                                  (= ,(cadr (car binds)) ,temp)
-                                  ,blk))))
-                            `(scope-block
-                              (block ,@hs
-                               ,@(map (lambda (v) `(local-def ,v)) vars)
-                               ,(car binds)
-                               ,blk))))))
+                        (let ((tmp (make-ssavalue)))
+                          `(block (= ,tmp ,(caddar binds))
+                                  (scope-block
+                                   (block ,@hs
+                                          ,@(map (lambda (v) `(local-def ,v)) vars)
+                                          (= ,(cadar binds) ,tmp)
+                                          ,blk)))))))
                (else (error "invalid let syntax"))))
              (else (error "invalid let syntax")))))))))
 
@@ -1787,33 +1771,34 @@
              (args (map dot-to-fuse (cdr kws+args)))
              (make `(call (top ,(if (null? kws) 'broadcasted 'broadcasted_kwsyntax)) ,@kws ,f ,@args)))
         (if top (cons 'fuse make) make)))
-    (if (and (length= e 3) (eq? (car e) '|.|))
-        (let ((f (cadr e)) (x (caddr e)))
-          (cond ((or (atom? x) (eq? (car x) 'quote) (eq? (car x) 'inert) (eq? (car x) '$))
-                 `(call (top getproperty) ,f ,x))
-                ((eq? (car x) 'tuple)
-                 (if (and (eq? (identifier-name f) '^) (length= x 3) (integer? (caddr x)))
-                     (make-fuse '(top literal_pow)
-                                (list f (cadr x) (expand-forms `(call (call (core apply_type) (top Val) ,(caddr x))))))
-                     (make-fuse f (cdr x))))
-                (else
-                 (error (string "invalid syntax \"" (deparse e) "\"")))))
-        (if (and (pair? e) (eq? (car e) 'call))
-            (begin
-              (define (make-fuse- f x)
-                (if (and (eq? (identifier-name f) '^) (length= x 2) (integer? (cadr x)))
-                    (make-fuse '(top literal_pow)
-                               (list f (car x) (expand-forms `(call (call (core apply_type) (top Val) ,(cadr x))))))
-                    (make-fuse f x)))
-              (let ((f (cadr e)))
-                (cond ((dotop-named? f)
-                       (make-fuse- (undotop f) (cddr e)))
-                      ;; (.+)(a, b) is parsed as (call (|.| +) a b), but we still want it to fuse
-                      ((and (length= f 2) (eq? (car f) '|.|))
-                       (make-fuse- (cadr f) (cddr e)))
-                      (else
-                        e))))
-            e)))
+    (cond ((and (length= e 3) (eq? (car e) '|.|))
+           (let ((f (cadr e)) (x (caddr e)))
+             (cond ((or (atom? x) (eq? (car x) 'quote) (eq? (car x) 'inert) (eq? (car x) '$))
+                    `(call (top getproperty) ,f ,x))
+                   ((eq? (car x) 'tuple)
+                    (if (and (eq? (identifier-name f) '^) (length= x 3) (integer? (caddr x)))
+                        (make-fuse '(top literal_pow)
+                                   (list f (cadr x) (expand-forms `(call (call (core apply_type) (top Val) ,(caddr x))))))
+                        (make-fuse f (cdr x))))
+                   (else
+                    (error (string "invalid syntax \"" (deparse e) "\""))))))
+          ((and (pair? e) (eq? (car e) 'call))
+           (define (make-fuse- f x)
+             (if (and (eq? (identifier-name f) '^) (length= x 2) (integer? (cadr x)))
+                 (make-fuse '(top literal_pow)
+                            (list f (car x) (expand-forms `(call (call (core apply_type) (top Val) ,(cadr x))))))
+                 (make-fuse f x)))
+           (let ((f (cadr e)))
+             (cond ((dotop-named? f)
+                    (make-fuse- (undotop f) (cddr e)))
+                   ;; (.+)(a, b) is parsed as (call (|.| +) a b), but we still want it to fuse
+                   ((and (length= f 2) (eq? (car f) '|.|))
+                    (make-fuse- (cadr f) (cddr e)))
+                   (else
+                     e))))
+          ((and (pair? e) (eq? (car e) 'comparison))
+           (dot-to-fuse (expand-compare-chain (cdr e)) top))
+          (else e)))
   (let ((e (dot-to-fuse rhs #t)) ; an expression '(fuse func args) if expr is a dot call
         (lhs-view (ref-to-view lhs))) ; x[...] expressions on lhs turn in to view(x, ...) to update x in-place
     (if (fuse? e)
@@ -1942,8 +1927,11 @@
          (blk? (and (pair? test) (eq? (car test) 'block)))
          (stmts (if blk? (cdr (butlast test)) '()))
          (test  (if blk? (last test) test)))
-    (if (and (pair? test) (eq? (car test) '&&))
-        (let ((clauses `(&& ,@(map expand-forms (cdr (flatten-ex '&& test))))))
+    (if (and (pair? test) (memq (car test) '(&& |\|\||)))
+        (let* ((clauses `(,(car test) ,@(map expand-forms (cdr (flatten-ex (car test) test)))))
+               (clauses (if (null? (cdr clauses))
+                            (if (eq? (car clauses) '&&) '(true) '(false))
+                            clauses)))
           `(if ,(if blk?
                     `(block ,@(map expand-forms stmts) ,clauses)
                     clauses)
@@ -1977,6 +1965,24 @@
                           (tuple ,@(map length rows))
                           ,@(apply append rows))))
              `(call ,@vcat ,@a))))))
+
+(define (expand-property-destruct lhss x)
+  (if (not (length= lhss 1))
+      (error (string "invalid assignment location \"" (deparse lhs) "\"")))
+  (let* ((xx (if (symbol-like? x) x (make-ssavalue)))
+         (ini (if (eq? x xx) '() (list (sink-assignment xx (expand-forms x))))))
+    `(block
+       ,@ini
+       ,@(map
+           (lambda (field)
+             (let ((prop (cond ((symbol? field) field)
+                               ((and (pair? field) (eq? (car field) '|::|) (symbol? (cadr field)))
+                                (cadr field))
+                               (else
+                                (error (string "invalid assignment location \"" (deparse lhs) "\""))))))
+               (expand-forms `(= ,field (call (top getproperty) ,xx (quote ,prop))))))
+           (cdar lhss))
+       (unnecessary ,xx))))
 
 (define (expand-tuple-destruct lhss x)
   (define (sides-match? l r)
@@ -2194,18 +2200,7 @@
                 (x    (caddr e)))
             (if (has-parameters? lhss)
                 ;; property destructuring
-                (if (length= lhss 1)
-                    (let* ((xx (if (symbol-like? x) x (make-ssavalue)))
-                           (ini (if (eq? x xx) '() (list (sink-assignment xx (expand-forms x))))))
-                      `(block
-                         ,@ini
-                         ,@(map (lambda (field)
-                                  (if (not (symbol? field))
-                                      (error (string "invalid assignment location \"" (deparse lhs) "\"")))
-                                  (expand-forms `(= ,field (call (top getproperty) ,xx (quote ,field)))))
-                             (cdar lhss))
-                         (unnecessary ,xx)))
-                    (error (string "invalid assignment location \"" (deparse lhs) "\"")))
+                (expand-property-destruct lhss x)
                 ;; multiple assignment
                 (expand-tuple-destruct lhss x))))
          ((typed_hcat)
@@ -4166,18 +4161,30 @@ f(x) = yt(x)
                  (compile (cadr e) break-labels value tail)
                  #f))
             ((if elseif)
-             (let ((tests (let* ((cond (cadr e))
-                                 (cond (if (and (pair? cond) (eq? (car cond) 'block))
-                                           (begin (if (length> cond 2) (compile (butlast cond) break-labels #f #f))
-                                                  (last cond))
-                                           cond)))
-                            (map (lambda (clause)
-                                   (emit `(gotoifnot ,(compile-cond clause break-labels) _)))
-                                 (if (and (pair? cond) (eq? (car cond) '&&))
-                                     (cdr cond)
-                                     (list cond)))))
-                   (end-jump `(goto _))
-                   (val (if (and value (not tail)) (new-mutable-var) #f)))
+             (let* ((cnd (cadr e))
+                    (cnd (if (and (pair? cnd) (eq? (car cnd) 'block))
+                              (begin (if (length> cnd 2) (compile (butlast cnd) break-labels #f #f))
+                                     (last cnd))
+                              cnd))
+                    (or? (and (pair? cnd) (eq? (car cnd) '|\|\||)))
+                    (tests (if or?
+                               (let ((short-circuit `(goto _)))
+                                 (for-each
+                                   (lambda (clause)
+                                     (let ((jmp (emit `(gotoifnot ,(compile-cond clause break-labels) _))))
+                                       (emit short-circuit)
+                                       (set-car! (cddr jmp) (make&mark-label))))
+                                   (butlast (cdr cnd)))
+                                 (let ((last-jmp (emit `(gotoifnot ,(compile-cond (last (cdr cnd)) break-labels) _))))
+                                   (set-car! (cdr short-circuit) (make&mark-label))
+                                   (list last-jmp)))
+                               (map (lambda (clause)
+                                      (emit `(gotoifnot ,(compile-cond clause break-labels) _)))
+                                    (if (and (pair? cnd) (eq? (car cnd) '&&))
+                                        (cdr cnd)
+                                        (list cnd)))))
+                    (end-jump `(goto _))
+                    (val (if (and value (not tail)) (new-mutable-var) #f)))
                (let ((v1 (compile (caddr e) break-labels value tail)))
                  (if val (emit-assignment val v1))
                  (if (and (not tail) (or (length> e 3) val))
