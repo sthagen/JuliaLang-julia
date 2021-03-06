@@ -32,6 +32,7 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
                                   fargs::Union{Nothing,Vector{Any}}, argtypes::Vector{Any}, @nospecialize(atype),
                                   sv::InferenceState, max_methods::Int = InferenceParams(interp).MAX_METHODS)
     if sv.params.unoptimize_throw_blocks && sv.currpc in sv.throw_blocks
+        add_remark!(interp, sv, "Skipped call in throw block")
         return CallMeta(Any, false)
     end
     valid_worlds = WorldRange()
@@ -108,7 +109,7 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
         val = pure_eval_call(f, argtypes)
         if val !== false
             # TODO: add some sort of edge(s)
-            return CallMeta(val, MethodResultPure())
+            return CallMeta(val, MethodResultPure(info))
         end
     end
 
@@ -348,6 +349,13 @@ end
 # where we would spend a lot of time, but are probably unliekly to get an improved
 # result anyway.
 function const_prop_heuristic(interp::AbstractInterpreter, method::Method, mi::MethodInstance)
+    if method.is_for_opaque_closure
+        # Not inlining an opaque closure can be very expensive, so be generous
+        # with the const-prop-ability. It is quite possible that we can't infer
+        # anything at all without const-propping, so the inlining check below
+        # isn't particularly helpful here.
+        return true
+    end
     # Peek at the inferred result for the function to determine if the optimizer
     # was able to cut it down to something simple (inlineable in particular).
     # If so, there's a good chance we might be able to const prop all the way
@@ -358,9 +366,7 @@ function const_prop_heuristic(interp::AbstractInterpreter, method::Method, mi::M
     if isdefined(code, :inferred) && !cache_inlineable
         cache_inf = code.inferred
         if !(cache_inf === nothing)
-            cache_src_inferred = ccall(:jl_ir_flag_inferred, Bool, (Any,), cache_inf)
-            cache_src_inlineable = ccall(:jl_ir_flag_inlineable, Bool, (Any,), cache_inf)
-            cache_inlineable = cache_src_inferred && cache_src_inlineable
+            cache_inlineable = inlining_policy(interp)(cache_inf) !== nothing
         end
     end
     if !cache_inlineable
@@ -373,7 +379,9 @@ function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nosp
     method = match.method
     nargs::Int = method.nargs
     method.isva && (nargs -= 1)
-    length(argtypes) >= nargs || return Any, nothing
+    if length(argtypes) < nargs
+        return Any, nothing
+    end
     haveconst = false
     allconst = true
     # see if any or all of the arguments are constant and propagating constants may be worthwhile
@@ -430,10 +438,14 @@ function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nosp
     end
     force_inference |= allconst
     mi = specialize_method(match, !force_inference)
-    mi === nothing && return Any, nothing
+    if mi === nothing
+        add_remark!(interp, sv, "[constprop] Failed to specialize")
+        return Any, nothing
+    end
     mi = mi::MethodInstance
     # decide if it's likely to be worthwhile
     if !force_inference && !const_prop_heuristic(interp, method, mi)
+        add_remark!(interp, sv, "[constprop] Disabled by heuristic")
         return Any, nothing
     end
     inf_cache = get_inference_cache(interp)
@@ -446,6 +458,7 @@ function abstract_call_method_with_const_args(interp::AbstractInterpreter, @nosp
             cyclei = 0
             while !(infstate === nothing)
                 if method === infstate.linfo.def && any(infstate.result.overridden_by_const)
+                    add_remark!(interp, sv, "[constprop] Edge cycle encountered")
                     return Any, nothing
                 end
                 if cyclei < length(infstate.callers_in_cycle)
@@ -796,8 +809,12 @@ function abstract_iteration(interp::AbstractInterpreter, @nospecialize(itft), @n
 end
 
 # do apply(af, fargs...), where af is a function value
-function abstract_apply(interp::AbstractInterpreter, @nospecialize(itft), @nospecialize(aft), aargtypes::Vector{Any}, sv::InferenceState,
+function abstract_apply(interp::AbstractInterpreter, argtypes::Vector{Any}, sv::InferenceState,
                         max_methods::Int = InferenceParams(interp).MAX_METHODS)
+    itft = argtype_by_index(argtypes, 2)
+    aft = argtype_by_index(argtypes, 3)
+    (itft === Bottom || aft === Bottom) && return CallMeta(Bottom, false)
+    aargtypes = argtype_tail(argtypes, 4)
     aftw = widenconst(aft)
     if !isa(aft, Const) && !isa(aft, PartialOpaque) && (!isType(aftw) || has_free_typevars(aftw))
         if !isconcretetype(aftw) || (aftw <: Builtin)
@@ -875,8 +892,10 @@ function abstract_apply(interp::AbstractInterpreter, @nospecialize(itft), @nospe
         push!(retinfos, ApplyCallInfo(call.info, arginfo))
         res = tmerge(res, call.rt)
         if bail_out_apply(interp, res, sv)
-            # No point carrying forward the info, we're not gonna inline it anyway
-            retinfo = nothing
+            if i != length(ctypes)
+                # No point carrying forward the info, we're not gonna inline it anyway
+                retinfo = false
+            end
             break
         end
     end
@@ -1074,6 +1093,32 @@ function abstract_call_unionall(argtypes::Vector{Any})
     return Any
 end
 
+function abstract_invoke(interp::AbstractInterpreter, argtypes::Vector{Any}, sv::InferenceState)
+    ft = widenconst(argtype_by_index(argtypes, 2))
+    ft === Bottom && return CallMeta(Bottom, false)
+    (types, isexact, isconcrete, istype) = instanceof_tfunc(argtype_by_index(argtypes, 3))
+    types === Bottom && return CallMeta(Bottom, false)
+    isexact || return CallMeta(Any, false)
+    argtype = argtypes_to_type(argtype_tail(argtypes, 4))
+    nargtype = typeintersect(types, argtype)
+    nargtype === Bottom && return CallMeta(Bottom, false)
+    nargtype isa DataType || return CallMeta(Any, false) # other cases are not implemented below
+    isdispatchelem(ft) || return CallMeta(Any, false) # check that we might not have a subtype of `ft` at runtime, before doing supertype lookup below
+    types = rewrap_unionall(Tuple{ft, unwrap_unionall(types).parameters...}, types)
+    nargtype = Tuple{ft, nargtype.parameters...}
+    argtype = Tuple{ft, argtype.parameters...}
+    result = findsup(types, method_table(interp))
+    if result === nothing
+        return CallMeta(Any, false)
+    end
+    method, valid_worlds = result
+    update_valid_age!(sv, valid_worlds)
+    (ti, env) = ccall(:jl_type_intersection_with_env, Any, (Any, Any), nargtype, method.sig)::SimpleVector
+    rt, edge = typeinf_edge(interp, method, ti, env, sv)
+    edge !== nothing && add_backedge!(edge::MethodInstance, sv)
+    return CallMeta(rt, InvokeCallInfo(MethodMatch(ti, env, method, argtype <: method.sig)))
+end
+
 # call where the function is known exactly
 function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         fargs::Union{Nothing,Vector{Any}}, argtypes::Vector{Any},
@@ -1084,12 +1129,11 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
 
     if isa(f, Builtin)
         if f === _apply_iterate
-            itft = argtype_by_index(argtypes, 2)
-            ft = argtype_by_index(argtypes, 3)
-            (itft === Bottom || ft === Bottom) && return CallMeta(Bottom, false)
-            return abstract_apply(interp, itft, ft, argtype_tail(argtypes, 4), sv, max_methods)
+            return abstract_apply(interp, argtypes, sv, max_methods)
+        elseif f === invoke
+            return abstract_invoke(interp, argtypes, sv)
         end
-        return CallMeta(abstract_call_builtin(interp, f, fargs, argtypes, sv, max_methods), nothing)
+        return CallMeta(abstract_call_builtin(interp, f, fargs, argtypes, sv, max_methods), false)
     elseif f === Core.kwfunc
         if la == 2
             ft = widenconst(argtypes[2])
@@ -1111,7 +1155,7 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         elseif la == 3
             ub_var = argtypes[3]
         end
-        return CallMeta(typevar_tfunc(n, lb_var, ub_var), nothing)
+        return CallMeta(typevar_tfunc(n, lb_var, ub_var), false)
     elseif f === UnionAll
         return CallMeta(abstract_call_unionall(argtypes), false)
     elseif f === Tuple && la == 2 && !isconcretetype(widenconst(argtypes[2]))
@@ -1129,11 +1173,11 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         # mark !== as exactly a negated call to ===
         rty = abstract_call_known(interp, (===), fargs, argtypes, sv).rt
         if isa(rty, Conditional)
-            return CallMeta(Conditional(rty.var, rty.elsetype, rty.vtype), nothing) # swap if-else
+            return CallMeta(Conditional(rty.var, rty.elsetype, rty.vtype), false) # swap if-else
         elseif isa(rty, Const)
-            return CallMeta(Const(rty.val === false), nothing)
+            return CallMeta(Const(rty.val === false), MethodResultPure())
         end
-        return CallMeta(rty, nothing)
+        return CallMeta(rty, false)
     elseif la == 3 && istopfunction(f, :(>:))
         # mark issupertype as a exact alias for issubtype
         # swap T1 and T2 arguments and call <:
@@ -1170,7 +1214,20 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
 end
 
 function abstract_call_opaque_closure(interp::AbstractInterpreter, closure::PartialOpaque, argtypes::Vector{Any}, sv::InferenceState)
-    return CallMeta(Any, nothing)
+    pushfirst!(argtypes, closure.env)
+    sig = argtypes_to_type(argtypes)
+    rt, edgecycle, edge = abstract_call_method(interp, closure.source::Method, sig, Core.svec(), false, sv)
+    info = OpaqueClosureCallInfo(edge)
+    if !edgecycle
+        const_rettype, result = abstract_call_method_with_const_args(interp, rt, closure, argtypes, MethodMatch(sig, Core.svec(), closure.source::Method, false), sv, edgecycle)
+        if const_rettype ⊑ rt
+           rt = const_rettype
+        end
+        if result !== nothing
+            info = ConstCallInfo(info, result)
+        end
+    end
+    return CallMeta(rt, info)
 end
 
 function most_general_argtypes(closure::PartialOpaque)
@@ -1180,7 +1237,7 @@ function most_general_argtypes(closure::PartialOpaque)
     if !isa(argt, DataType) || argt.name !== typename(Tuple)
         argt = Tuple
     end
-    return most_general_argtypes(closure.source, argt, closure.isva)
+    return most_general_argtypes(closure.source, argt, closure.isva, false)
 end
 
 # call where the function is any lattice element
@@ -1195,7 +1252,7 @@ function abstract_call(interp::AbstractInterpreter, fargs::Union{Nothing,Vector{
     elseif isa(ft, DataType) && isdefined(ft, :instance)
         f = ft.instance
     elseif isa(ft, PartialOpaque)
-        return abstract_call_opaque_closure(interp, ft, argtypes, sv)
+        return abstract_call_opaque_closure(interp, ft, argtypes[2:end], sv)
     elseif isa(unwrap_unionall(ft), DataType) && unwrap_unionall(ft).name === typename(Core.OpaqueClosure)
         return CallMeta(rewrap_unionall(unwrap_unionall(ft).parameters[2], ft), false)
     else
