@@ -1623,10 +1623,8 @@ get_llvm_target_noext(const TargetData<feature_sz> &data)
             feature_strs.push_back(std::string("-") + fename_str);
         }
     }
-#if JL_LLVM_VERSION >= 110000
     if (test_nbit(features, Feature::v8_6a))
         feature_strs.push_back("+v8.6a");
-#endif
     if (test_nbit(features, Feature::v8_5a))
         feature_strs.push_back("+v8.5a");
     if (test_nbit(features, Feature::v8_4a))
@@ -1760,13 +1758,7 @@ const std::pair<std::string,std::string> &jl_get_llvm_disasm_target(void)
     auto max_feature = get_max_feature();
     static const auto res = get_llvm_target_str(TargetData<feature_sz>{host_cpu_name(),
 #ifdef _CPU_AARCH64_
-#  if JL_LLVM_VERSION > 110000
-                "+ecv,"
-#  endif
-#  if JL_LLVM_VERSION > 100000
-                "+tme,"
-#  endif
-                "+am,+specrestrict,+predres,+lor,+perfmon,+spe,+tracev8.4",
+                "+ecv,+tme,+am,+specrestrict,+predres,+lor,+perfmon,+spe,+tracev8.4",
 #else
                 "+dotprod",
 #endif
@@ -1810,6 +1802,8 @@ extern "C" int jl_test_cpu_feature(jl_cpu_feature_t feature)
 #ifdef _CPU_AARCH64_
 // FPCR FZ, bit [24]
 static constexpr uint32_t fpcr_fz_mask = 1 << 24;
+// FPCR FZ16, bit [19]
+static constexpr uint32_t fpcr_fz16_mask = 1 << 19;
 // FPCR DN, bit [25]
 static constexpr uint32_t fpcr_dn_mask = 1 << 25;
 
@@ -1833,7 +1827,8 @@ extern "C" JL_DLLEXPORT int32_t jl_get_zero_subnormals(void)
 extern "C" JL_DLLEXPORT int32_t jl_set_zero_subnormals(int8_t isZero)
 {
     uint32_t fpcr = get_fpcr_aarch64();
-    fpcr = isZero ? (fpcr | fpcr_fz_mask) : (fpcr & ~fpcr_fz_mask);
+    static uint32_t mask = fpcr_fz_mask | (jl_test_cpu_feature(JL_AArch64_fullfp16) ? fpcr_fz16_mask : 0);
+    fpcr = isZero ? (fpcr | mask) : (fpcr & ~mask);
     set_fpcr_aarch64(fpcr);
     return 0;
 }

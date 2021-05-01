@@ -751,7 +751,10 @@ JL_DLLEXPORT void jl_gdblookup(void* ip)
 // Print backtrace for current exception in catch block
 JL_DLLEXPORT void jlbacktrace(void) JL_NOTSAFEPOINT
 {
-    jl_excstack_t *s = jl_get_ptls_states()->current_task->excstack;
+    jl_ptls_t ptls = jl_get_ptls_states();
+    if (ptls->current_task == NULL)
+        return;
+    jl_excstack_t *s = ptls->current_task->excstack;
     if (!s)
         return;
     size_t i, bt_size = jl_excstack_bt_size(s, s->top);
@@ -769,6 +772,11 @@ JL_DLLEXPORT void jlbacktracet(jl_task_t *t)
     for (i = 0; i < bt_size; i += jl_bt_entry_size(bt_data + i)) {
         jl_print_bt_entry_codeloc(bt_data + i);
     }
+}
+
+JL_DLLEXPORT void jl_print_backtrace(void) JL_NOTSAFEPOINT
+{
+    jlbacktrace();
 }
 
 #ifdef __cplusplus

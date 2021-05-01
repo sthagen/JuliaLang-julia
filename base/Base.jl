@@ -31,6 +31,7 @@ getproperty(x::Tuple, f::Int) = getfield(x, f)
 setproperty!(x::Tuple, f::Int, v) = setfield!(x, f, v) # to get a decent error
 
 getproperty(x, f::Symbol) = getfield(x, f)
+dotgetproperty(x, f) = getproperty(x, f)
 setproperty!(x, f::Symbol, v) = setfield!(x, f, convert(fieldtype(typeof(x), f), v))
 
 include("coreio.jl")
@@ -212,12 +213,11 @@ include("methodshow.jl")
 include("cartesian.jl")
 using .Cartesian
 include("multidimensional.jl")
-include("permuteddimsarray.jl")
-using .PermutedDimsArrays
 
 include("broadcast.jl")
 using .Broadcast
-using .Broadcast: broadcasted, broadcasted_kwsyntax, materialize, materialize!
+using .Broadcast: broadcasted, broadcasted_kwsyntax, materialize, materialize!,
+                  broadcast_preserving_zero_d, andand, oror
 
 # missing values
 include("missing.jl")
@@ -230,7 +230,9 @@ include("sysinfo.jl")
 include("libc.jl")
 using .Libc: getpid, gethostname, time
 
-include("env.jl")
+# Logging
+include("logging.jl")
+using .CoreLogging
 
 # Concurrency
 include("linked_list.jl")
@@ -242,9 +244,7 @@ include("task.jl")
 include("threads_overloads.jl")
 include("weakkeydict.jl")
 
-# Logging
-include("logging.jl")
-using .CoreLogging
+include("env.jl")
 
 # BinaryPlatforms, used by Artifacts
 include("binaryplatforms.jl")
@@ -292,6 +292,9 @@ end
 include("reducedim.jl")  # macros in this file relies on string.jl
 include("accumulate.jl")
 
+include("permuteddimsarray.jl")
+using .PermutedDimsArrays
+
 # basic data structures
 include("ordering.jl")
 using .Order
@@ -336,6 +339,9 @@ include("meta.jl")
 include("stacktraces.jl")
 using .StackTraces
 
+# experimental API's
+include("experimental.jl")
+
 # utilities
 include("deepcopy.jl")
 include("download.jl")
@@ -358,9 +364,6 @@ include("timing.jl")
 include("util.jl")
 
 include("asyncmap.jl")
-
-# experimental API's
-include("experimental.jl")
 
 # deprecated functions
 include("deprecated.jl")
@@ -422,6 +425,9 @@ for match = _methods(+, (Int, Int), -1, get_world_counter())
     deleteat!(Any[1,2,3], [1,3])
     Core.svec(1, 2) == Core.svec(3, 4)
     any(t->t[1].line > 1, [(LineNumberNode(2,:none), :(1+1))])
+
+    # Code loading uses this
+    sortperm(mtime.(readdir(".")), rev=true)
 
     break   # only actually need to do this once
 end
