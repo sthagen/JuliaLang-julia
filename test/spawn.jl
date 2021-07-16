@@ -261,6 +261,74 @@ end
     end
 end
 
+@testset "redirect_stdio" begin
+
+    function hello_err_out()
+        println(stderr, "hello from stderr")
+        println(stdout, "hello from stdout")
+    end
+    @testset "same path for multiple streams" begin
+        @test_throws ArgumentError redirect_stdio(hello_err_out,
+                                            stdin="samepath.txt", stdout="samepath.txt")
+        @test_throws ArgumentError redirect_stdio(hello_err_out,
+                                            stdin="samepath.txt", stderr="samepath.txt")
+
+        @test_throws ArgumentError redirect_stdio(hello_err_out,
+                                            stdin=joinpath("tricky", "..", "samepath.txt"),
+                                            stderr="samepath.txt")
+        mktempdir() do dir
+            path = joinpath(dir, "stdouterr.txt")
+            redirect_stdio(hello_err_out, stdout=path, stderr=path)
+            @test read(path, String) == """
+            hello from stderr
+            hello from stdout
+            """
+        end
+    end
+
+    mktempdir() do dir
+        path_stdout = joinpath(dir, "stdout.txt")
+        path_stderr = joinpath(dir, "stderr.txt")
+        redirect_stdio(hello_err_out, stderr=devnull, stdout=path_stdout)
+        @test read(path_stdout, String) == "hello from stdout\n"
+
+        open(path_stderr, "w") do ioerr
+            redirect_stdio(hello_err_out, stderr=ioerr, stdout=devnull)
+        end
+        @test read(path_stderr, String) == "hello from stderr\n"
+    end
+
+    mktempdir() do dir
+        path_stderr = joinpath(dir, "stderr.txt")
+        path_stdin  = joinpath(dir, "stdin.txt")
+        path_stdout = joinpath(dir, "stdout.txt")
+
+        content_stderr = randstring()
+        content_stdout = randstring()
+
+        redirect_stdio(stdout=path_stdout, stderr=path_stderr) do
+            print(content_stdout)
+            print(stderr, content_stderr)
+        end
+
+        @test read(path_stderr, String) == content_stderr
+        @test read(path_stdout, String) == content_stdout
+    end
+
+    # stdin is unavailable on the workers. Run test on master.
+    ret = Core.eval(Main,
+            quote
+                remotecall_fetch(1) do
+                    mktempdir() do dir
+                        path = joinpath(dir, "stdin.txt")
+                        write(path, "hello from stdin\n")
+                        redirect_stdio(readline, stdin=path)
+                    end
+                end
+            end)
+    @test ret == "hello from stdin"
+end
+
 # issue #36136
 @testset "redirect to devnull" begin
     @test redirect_stdout(devnull) do; println("Hello") end === nothing
@@ -743,6 +811,20 @@ if Sys.iswindows()
     rm(busybox, force=true)
 end
 
+
+# test (t)csh escaping if tcsh is installed
+cshcmd = "/bin/tcsh"
+if isfile(cshcmd)
+    csh_echo(s) = chop(read(Cmd([cshcmd, "-c",
+                                 "echo " * Base.shell_escape_csh(s)]), String))
+    csh_test(s) = csh_echo(s) == s
+    @testset "shell_escape_csh" begin
+        for s in ["", "-a/b", "'", "'£\"", join(' ':'~') ^ 2,
+                  "\t", "\n", "'\n", "\"\n", "'\n\n\""]
+            @test csh_test(s)
+        end
+    end
+end
 
 @testset "shell escaping on Windows" begin
     # Note  argument A can be parsed both as A or "A".

@@ -42,16 +42,6 @@ pairs(::Type{NamedTuple}) = Pairs{Symbol, V, NTuple{N, Symbol}, NamedTuple{names
 #const NamedTuplePair{N, V, names, T<:NTuple{N, Any}} = Pairs{Symbol, V, NTuple{N, Symbol}, NamedTuple{names, T}}
 #export NamedTuplePair
 
-
-# The real @inline macro is not available until after array.jl, so this
-# internal macro splices the meta Expr directly into the function body.
-macro _inline_meta()
-    Expr(:meta, :inline)
-end
-macro _noinline_meta()
-    Expr(:meta, :noinline)
-end
-
 macro _gc_preserve_begin(arg1)
     Expr(:gc_preserve_begin, esc(arg1))
 end
@@ -457,7 +447,9 @@ reinterpret(::Type{T}, x) where {T} = bitcast(T, x)
     sizeof(obj)
 
 Size, in bytes, of the canonical binary representation of the given `DataType` `T`, if any.
-Size, in bytes, of object `obj` if it is not `DataType`.
+Or the size, in bytes, of object `obj` if it is not a `DataType`.
+
+See also [`summarysize`](@ref).
 
 # Examples
 ```jldoctest
@@ -470,7 +462,7 @@ julia> sizeof(ComplexF64)
 julia> sizeof(1.0)
 8
 
-julia> sizeof([1.0:10.0;])
+julia> sizeof(collect(1.0:10.0))
 80
 ```
 
@@ -537,7 +529,7 @@ julia> f2()
     As noted there, the caller must verify—using information they can access—that
     their accesses are valid before using `@inbounds`. For indexing into your
     [`AbstractArray`](@ref) subclasses, for example, this involves checking the
-    indices against its [`size`](@ref). Therefore, `@boundscheck` annotations
+    indices against its [`axes`](@ref). Therefore, `@boundscheck` annotations
     should only be added to a [`getindex`](@ref) or [`setindex!`](@ref)
     implementation after you are certain its behavior is correct.
 """
