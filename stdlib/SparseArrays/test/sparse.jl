@@ -786,6 +786,8 @@ end
     end
 
     @testset "empty cases" begin
+        errchecker(str) = occursin("reducing over an empty collection is not allowed", str) ||
+                          occursin("collection slices must be non-empty", str)
         @test sum(sparse(Int[])) === 0
         @test prod(sparse(Int[])) === 1
         @test_throws ArgumentError minimum(sparse(Int[]))
@@ -798,9 +800,9 @@ end
             @test isequal(f(spzeros(0, 1), dims=3), f(Matrix{Int}(I, 0, 1), dims=3))
         end
         for f in (minimum, maximum, findmin, findmax)
-            @test_throws ArgumentError f(spzeros(0, 1), dims=1)
+            @test_throws errchecker f(spzeros(0, 1), dims=1)
             @test isequal(f(spzeros(0, 1), dims=2), f(Matrix{Int}(I, 0, 1), dims=2))
-            @test_throws ArgumentError f(spzeros(0, 1), dims=(1, 2))
+            @test_throws errchecker f(spzeros(0, 1), dims=(1, 2))
             @test isequal(f(spzeros(0, 1), dims=3), f(Matrix{Int}(I, 0, 1), dims=3))
         end
     end
@@ -1739,10 +1741,10 @@ end
 end
 
 @testset "droptol" begin
-    local A = guardseed(1234321) do
+    A = guardseed(1234321) do
         triu(sprand(10, 10, 0.2))
     end
-    @test getcolptr(SparseArrays.droptol!(A, 0.01)) == [1, 1, 1, 1, 3, 3, 5, 6, 8, 11, 12]
+    @test getcolptr(SparseArrays.droptol!(A, 0.01)) == [1, 1, 3, 4, 5, 6, 7, 11, 13, 15, 18]
     @test isequal(SparseArrays.droptol!(sparse([1], [1], [1]), 1), SparseMatrixCSC(1, 1, Int[1, 1], Int[], Int[]))
 end
 
@@ -2074,7 +2076,7 @@ end
 end
 
 @testset "sparse matrix opnormestinv" begin
-    Random.seed!(1234)
+    Random.seed!(1235)
     Ac = sprandn(20,20,.5) + im* sprandn(20,20,.5)
     Aci = ceil.(Int64, 100*sprand(20,20,.5)) + im*ceil.(Int64, sprand(20,20,.5))
     Ar = sprandn(20,20,.5)

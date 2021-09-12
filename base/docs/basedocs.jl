@@ -23,6 +23,9 @@ as well as many great tutorials and learning resources:
 For help on a specific function or macro, type `?` followed
 by its name, e.g. `?cos`, or `?@time`, and press enter.
 Type `;` to enter shell mode, `]` to enter package mode.
+
+To exit the interactive session, type `CTRL-D` (press the
+control key together with the `d` key), or type `exit()`.
 """
 kw"help", kw"Julia", kw"julia", kw""
 
@@ -974,9 +977,19 @@ kw"..."
     ;
 
 `;` has a similar role in Julia as in many C-like languages, and is used to delimit the
-end of the previous statement. `;` is not necessary after new lines, but can be used to
+end of the previous statement.
+
+`;` is not necessary at the end of a line, but can be used to
 separate statements on a single line or to join statements into a single expression.
-`;` is also used to suppress output printing in the REPL and similar interfaces.
+
+Adding `;` at the end of a line in the REPL will suppress printing the result of that expression.
+
+In function declarations, and optionally in calls, `;` separates regular arguments from keywords.
+
+While constructing arrays, if the arguments inside the square brackets are separated by `;`
+then their contents are vertically concatenated together.
+
+In the standard REPL, typing `;` on an empty line will switch to shell mode.
 
 # Examples
 ```julia
@@ -993,6 +1006,19 @@ julia> foo();
 
 julia> bar()
 "Hello, Mars!"
+
+julia> function plot(x, y; style="solid", width=1, color="black")
+           ###
+       end
+
+julia> [1 2; 3 4]
+2×2 Matrix{Int64}:
+ 1  2
+ 3  4
+
+julia> ; # upon typing ;, the prompt changes (in place) to: shell>
+shell> echo hello
+hello
 ```
 """
 kw";"
@@ -1980,24 +2006,23 @@ setfield!
 
 These atomically perform the operations to simultaneously get and set a field:
 
-    y = getfield!(value, name)
+    y = getfield(value, name)
     setfield!(value, name, x)
     return y
-```
 """
 swapfield!
 
 """
-    modifyfield!(value, name::Symbol, op, x, [order::Symbol])
-    modifyfield!(value, i::Int, op, x, [order::Symbol])
+    modifyfield!(value, name::Symbol, op, x, [order::Symbol]) -> Pair
+    modifyfield!(value, i::Int, op, x, [order::Symbol]) -> Pair
 
 These atomically perform the operations to get and set a field after applying
 the function `op`.
 
-    y = getfield!(value, name)
+    y = getfield(value, name)
     z = op(y, x)
     setfield!(value, name, z)
-    return y, z
+    return y => z
 
 If supported by the hardware (for example, atomic increment), this may be
 optimized to the appropriate hardware instruction, otherwise it'll use a loop.
@@ -2006,18 +2031,19 @@ modifyfield!
 
 """
     replacefield!(value, name::Symbol, expected, desired,
-        [success_order::Symbol, [fail_order::Symbol=success_order]) =>
-        (old, Bool)
+                  [success_order::Symbol, [fail_order::Symbol=success_order]) -> (; old, success::Bool)
+    replacefield!(value, i::Int, expected, desired,
+                  [success_order::Symbol, [fail_order::Symbol=success_order]) -> (; old, success::Bool)
 
 These atomically perform the operations to get and conditionally set a field to
 a given value.
 
-    y = getfield!(value, name, fail_order)
+    y = getfield(value, name, fail_order)
     ok = y === expected
     if ok
         setfield!(value, name, desired, success_order)
     end
-    return y, ok
+    return (; old = y, success = ok)
 
 If supported by the hardware, this may be optimized to the appropriate hardware
 instruction, otherwise it'll use a loop.
@@ -2529,10 +2555,20 @@ UnionAll
 """
     ::
 
-With the `::`-operator type annotations are attached to expressions and variables in programs.
-See the manual section on [Type Declarations](@ref).
+The `::` operator either asserts that a value has the given type, or declares that
+a local variable or function return always has the given type.
 
-Outside of declarations `::` is used to assert that expressions and variables in programs have a given type.
+Given `expression::T`, `expression` is first evaluated. If the result is of type
+`T`, the value is simply returned. Otherwise, a [`TypeError`](@ref) is thrown.
+
+In local scope, the syntax `local x::T` or `x::T = expression` declares that local variable
+`x` always has type `T`. When a value is assigned to the variable, it will be
+converted to type `T` by calling [`convert`](@ref).
+
+In a method declaration, the syntax `function f(x)::T` causes any value returned by
+the method to be converted to type `T`.
+
+See the manual section on [Type Declarations](@ref).
 
 # Examples
 ```jldoctest
@@ -2541,6 +2577,13 @@ ERROR: TypeError: typeassert: expected AbstractFloat, got a value of type Int64
 
 julia> (1+2)::Int
 3
+
+julia> let
+           local x::Int
+           x = 2.0
+           x
+       end
+2
 ```
 """
 kw"::"

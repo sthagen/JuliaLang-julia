@@ -1399,6 +1399,25 @@ using Base: typed_hvncat
         @test [v v;;; fill(v, 1, 2)] == fill(v, 1, 2, 2)
     end
 
+    # output dimensions are maximum of input dimensions and concatenation dimension
+    begin
+        v1 = fill(1, 1, 1)
+        v2 = fill(1, 1, 1, 1, 1)
+        v3 = fill(1, 1, 2, 1, 1)
+        @test [v1 ;;; v2] == [1 ;;; 1 ;;;;]
+        @test [v2 ;;; v1] == [1 ;;; 1 ;;;;]
+        @test [v3 ;;; v1 v1] == [1 1 ;;; 1 1 ;;;;]
+        @test [v1 v1 ;;; v3] == [1 1 ;;; 1 1 ;;;;]
+        @test [v2 v1 ;;; v1 v1] == [1 1 ;;; 1 1 ;;;;]
+        @test [v1 v1 ;;; v1 v2] == [1 1 ;;; 1 1 ;;;;]
+        @test [v2 ;;; 1] == [1 ;;; 1 ;;;;]
+        @test [1 ;;; v2] == [1 ;;; 1 ;;;;]
+        @test [v3 ;;; 1 v1] == [1 1 ;;; 1 1 ;;;;]
+        @test [v1 1 ;;; v3] == [1 1 ;;; 1 1 ;;;;]
+        @test [v2 1 ;;; v1 v1] == [1 1 ;;; 1 1 ;;;;]
+        @test [v1 1 ;;; v1 v2] == [1 1 ;;; 1 1 ;;;;]
+    end
+
     # dims form
     for v ∈ ((), (1,), ([1],), (1, [1]), ([1], 1), ([1], [1]))
         # reject dimension < 0
@@ -1414,7 +1433,8 @@ using Base: typed_hvncat
             v1 == v2 == 1 && continue
             for v3 ∈ ((), (1,), ([1],), (1, [1]), ([1], 1), ([1], [1]))
                 @test_throws ArgumentError hvncat((v1, v2), true, v3...)
-                @test_throws ArgumentError hvncat(((v1,), (v2,)), true, v3...)
+                @test_throws str->(occursin("`shape` argument must consist of positive integers", str) ||
+                                   occursin("reducing over an empty collection is not allowed", str)) hvncat(((v1,), (v2,)), true, v3...)
             end
         end
     end
@@ -1545,4 +1565,9 @@ end
     @test_throws BoundsError keepat!(a, -1:10)
     @test_throws ArgumentError keepat!(a, [2, 1])
     @test isempty(keepat!(a, []))
+end
+
+@testset "reshape methods for AbstractVectors" begin
+    r = Base.IdentityUnitRange(3:4)
+    @test reshape(r, :) === reshape(r, (:,)) === r
 end

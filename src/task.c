@@ -29,6 +29,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <unistd.h>
 #include <errno.h>
 #include <inttypes.h>
 #include "julia.h"
@@ -41,7 +42,7 @@
 extern "C" {
 #endif
 
-#if defined(JL_ASAN_ENABLED)
+#if defined(_COMPILER_ASAN_ENABLED_)
 static inline void sanitizer_start_switch_fiber(const void* bottom, size_t size) {
     __sanitizer_start_switch_fiber(NULL, bottom, size);
 }
@@ -53,7 +54,7 @@ static inline void sanitizer_start_switch_fiber(const void* bottom, size_t size)
 static inline void sanitizer_finish_switch_fiber(void) {}
 #endif
 
-#if defined(JL_TSAN_ENABLED)
+#if defined(_COMPILER_TSAN_ENABLED_)
 static inline void tsan_destroy_ctx(jl_ptls_t ptls, void *state) {
     if (state != &ptls->root_task->state) {
         __tsan_destroy_fiber(ctx->state);
@@ -67,8 +68,8 @@ static inline void tsan_switch_to_ctx(void *state)  {
 
 // empirically, jl_finish_task needs about 64k stack space to infer/run
 // and additionally, gc-stack reserves 64k for the guard pages
-#if defined(MINSIGSTKSZ) && MINSIGSTKSZ > 131072
-#define MINSTKSZ MINSIGSTKSZ
+#if defined(MINSIGSTKSZ)
+#define MINSTKSZ (MINSIGSTKSZ > 131072 ? MINSIGSTKSZ : 131072)
 #else
 #define MINSTKSZ 131072
 #endif
@@ -321,7 +322,7 @@ JL_DLLEXPORT jl_task_t *jl_get_next_task(void) JL_NOTSAFEPOINT
     return ct;
 }
 
-#ifdef JL_TSAN_ENABLED
+#ifdef _COMPILER_TSAN_ENABLED_
 const char tsan_state_corruption[] = "TSAN state corrupted. Exiting HARD!\n";
 #endif
 
@@ -334,7 +335,7 @@ static void ctx_switch(jl_task_t *lastt)
     // none of these locks should be held across a task switch
     assert(ptls->locks.len == 0);
 
-#ifdef JL_TSAN_ENABLED
+#ifdef _COMPILER_TSAN_ENABLED_
     if (lastt->ctx.tsan_state != __tsan_get_current_fiber()) {
         // Something went really wrong - don't even assume that we can
         // use assert/abort which involve lots of signal handling that
@@ -400,7 +401,7 @@ static void ctx_switch(jl_task_t *lastt)
 #endif
     jl_set_pgcstack(&t->gcstack);
 
-#if defined(JL_TSAN_ENABLED)
+#if defined(_COMPILER_TSAN_ENABLED_)
     tsan_switch_to_ctx(&t->tsan_state);
     if (killed)
         tsan_destroy_ctx(ptls, &lastt->tsan_state);
@@ -561,7 +562,10 @@ static void JL_NORETURN throw_internal(jl_task_t *ct, jl_value_t *exception JL_M
     ptls->io_wait = 0;
     // @time needs its compile timer disabled on error,
     // and cannot use a try-finally as it would break scope for assignments
-    jl_measure_compile_time[ptls->tid] = 0;
+    // We blindly disable compilation time tracking here, for all running Tasks, even though
+    // it may cause some incorrect measurements. This is a known bug, and is being tracked
+    // here: https://github.com/JuliaLang/julia/pull/39138
+    jl_atomic_store_relaxed(&jl_measure_compile_time_enabled, 0);
     JL_GC_PUSH1(&exception);
     jl_gc_unsafe_enter(ptls);
     if (exception) {
@@ -663,7 +667,7 @@ JL_DLLEXPORT uint64_t jl_tasklocal_genrandom(jl_task_t *task) JL_NOTSAFEPOINT
     uint64_t s2 = task->rngState2;
     uint64_t s3 = task->rngState3;
 
-    uint64_t t = s0 << 17;
+    uint64_t t = s1 << 17;
     uint64_t tmp = s0 + s3;
     uint64_t res = ((tmp << 23) | (tmp >> 41)) + s0;
     s2 ^= s0;
@@ -765,7 +769,7 @@ JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, jl_value_t *completion
             memcpy(&t->ctx, &ct->ptls->base_ctx, sizeof(t->ctx));
     }
 #endif
-#ifdef JL_TSAN_ENABLED
+#ifdef _COMPILER_TSAN_ENABLED_
     t->tsan_state = __tsan_create_fiber(0);
 #endif
     return t;
@@ -1147,7 +1151,7 @@ static void jl_start_fiber_set(jl_ucontext_t *t)
 #endif
 
 #if defined(JL_HAVE_SIGALTSTACK)
-#if defined(JL_TSAN_ENABLED)
+#if defined(_COMPILER_TSAN_ENABLED_)
 #error TSAN support not currently implemented for this tasking model
 #endif
 
@@ -1237,7 +1241,7 @@ static void jl_set_fiber(jl_ucontext_t *t)
 #endif
 
 #if defined(JL_HAVE_ASYNCIFY)
-#if defined(JL_TSAN_ENABLED)
+#if defined(_COMPILER_TSAN_ENABLED_)
 #error TSAN support not currently implemented for this tasking model
 #endif
 
@@ -1313,7 +1317,7 @@ void jl_init_root_task(jl_ptls_t ptls, void *stack_lo, void *stack_hi)
     jl_set_pgcstack(&ct->gcstack);
     assert(jl_current_task == ct);
 
-#ifdef JL_TSAN_ENABLED
+#ifdef _COMPILER_TSAN_ENABLED_
     ct->tsan_state = __tsan_get_current_fiber();
 #endif
 

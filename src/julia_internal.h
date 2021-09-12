@@ -15,11 +15,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#ifdef JL_ASAN_ENABLED
+#ifdef _COMPILER_ASAN_ENABLED_
 void __sanitizer_start_switch_fiber(void**, const void*, size_t);
 void __sanitizer_finish_switch_fiber(void*, const void**, size_t*);
 #endif
-#ifdef JL_TSAN_ENABLED
+#ifdef _COMPILER_TSAN_ENABLED_
 void *__tsan_create_fiber(unsigned flags);
 void *__tsan_get_current_fiber(void);
 void __tsan_destroy_fiber(void *fiber);
@@ -154,8 +154,9 @@ static inline uint64_t cycleclock(void)
 
 #include "timing.h"
 
-extern uint8_t *jl_measure_compile_time;
-extern uint64_t *jl_cumulative_compile_time;
+// Global *atomic* integers controlling *process-wide* measurement of compilation time.
+extern uint8_t jl_measure_compile_time_enabled;
+extern uint64_t jl_cumulative_compile_time;
 
 #ifdef _COMPILER_MICROSOFT_
 #  define jl_return_address() ((uintptr_t)_ReturnAddress())
@@ -406,7 +407,7 @@ jl_value_t *jl_permbox64(jl_datatype_t *t, int64_t x);
 jl_svec_t *jl_perm_symsvec(size_t n, ...);
 
 // this sizeof(__VA_ARGS__) trick can't be computed until C11, but that only matters to Clang in some situations
-#if !defined(__clang_analyzer__) && !(defined(JL_ASAN_ENABLED) || defined(JL_TSAN_ENABLED))
+#if !defined(__clang_analyzer__) && !(defined(_COMPILER_ASAN_ENABLED_) || defined(_COMPILER_TSAN_ENABLED_))
 #ifdef __GNUC__
 #define jl_perm_symsvec(n, ...) \
     (jl_perm_symsvec)(__extension__({                                         \
@@ -474,9 +475,24 @@ STATIC_INLINE jl_value_t *undefref_check(jl_datatype_t *dt, jl_value_t *v) JL_NO
     return v;
 }
 
+// -- helper types -- //
+
+typedef struct {
+    uint8_t pure:1;
+    uint8_t propagate_inbounds:1;
+    uint8_t inlineable:1;
+    uint8_t inferred:1;
+    uint8_t constprop:2; // 0 = use heuristic; 1 = aggressive; 2 = none
+} jl_code_info_flags_bitfield_t;
+
+typedef union {
+    jl_code_info_flags_bitfield_t bits;
+    uint8_t packed;
+} jl_code_info_flags_t;
 
 // -- functions -- //
 
+// jl_code_info_flag_t code_info_flags(uint8_t pure, uint8_t propagate_inbounds, uint8_t inlineable, uint8_t inferred, uint8_t constprop);
 jl_code_info_t *jl_type_infer(jl_method_instance_t *li, size_t world, int force);
 jl_code_instance_t *jl_compile_method_internal(jl_method_instance_t *meth JL_PROPAGATES_ROOT, size_t world);
 jl_code_instance_t *jl_generate_fptr(jl_method_instance_t *mi JL_PROPAGATES_ROOT, size_t world);
@@ -798,11 +814,11 @@ static inline void jl_set_gc_and_wait(void)
 void jl_gc_set_permalloc_region(void *start, void *end);
 
 JL_DLLEXPORT jl_value_t *jl_dump_method_asm(jl_method_instance_t *linfo, size_t world,
-        int raw_mc, char getwrapper, const char* asm_variant, const char *debuginfo, char binary);
+        char raw_mc, char getwrapper, const char* asm_variant, const char *debuginfo, char binary);
 JL_DLLEXPORT void *jl_get_llvmf_defn(jl_method_instance_t *linfo, size_t world, char getwrapper, char optimize, const jl_cgparams_t params);
-JL_DLLEXPORT jl_value_t *jl_dump_fptr_asm(uint64_t fptr, int raw_mc, const char* asm_variant, const char *debuginfo, char binary);
-JL_DLLEXPORT jl_value_t *jl_dump_llvm_asm(void *F, const char* asm_variant, const char *debuginfo);
+JL_DLLEXPORT jl_value_t *jl_dump_fptr_asm(uint64_t fptr, char raw_mc, const char* asm_variant, const char *debuginfo, char binary);
 JL_DLLEXPORT jl_value_t *jl_dump_function_ir(void *f, char strip_ir_metadata, char dump_module, const char *debuginfo);
+JL_DLLEXPORT jl_value_t *jl_dump_function_asm(void *F, char raw_mc, const char* asm_variant, const char *debuginfo, char binary);
 
 void *jl_create_native(jl_array_t *methods, const jl_cgparams_t cgparams, int policy);
 void jl_dump_native(void *native_code,
@@ -1343,6 +1359,7 @@ void jl_log(int level, jl_value_t *module, jl_value_t *group, jl_value_t *id,
 int isabspath(const char *in) JL_NOTSAFEPOINT;
 
 extern jl_sym_t *call_sym;    extern jl_sym_t *invoke_sym;
+extern jl_sym_t *invoke_modify_sym;
 extern jl_sym_t *empty_sym;   extern jl_sym_t *top_sym;
 extern jl_sym_t *module_sym;  extern jl_sym_t *slot_sym;
 extern jl_sym_t *export_sym;  extern jl_sym_t *import_sym;
@@ -1374,7 +1391,7 @@ extern jl_sym_t *static_parameter_sym; extern jl_sym_t *inline_sym;
 extern jl_sym_t *noinline_sym; extern jl_sym_t *generated_sym;
 extern jl_sym_t *generated_only_sym; extern jl_sym_t *isdefined_sym;
 extern jl_sym_t *propagate_inbounds_sym; extern jl_sym_t *specialize_sym;
-extern jl_sym_t *aggressive_constprop_sym;
+extern jl_sym_t *aggressive_constprop_sym; extern jl_sym_t *no_constprop_sym;
 extern jl_sym_t *nospecialize_sym; extern jl_sym_t *macrocall_sym;
 extern jl_sym_t *colon_sym; extern jl_sym_t *hygienicscope_sym;
 extern jl_sym_t *throw_undef_if_not_sym; extern jl_sym_t *getfield_undefref_sym;
@@ -1446,6 +1463,41 @@ uint16_t __gnu_f2h_ieee(float param) JL_NOTSAFEPOINT;
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef USE_DTRACE
+#include "uprobes.h.gen"
+
+// uprobes.h.gen on systems with DTrace, is auto-generated to include
+// `JL_PROBE_{PROBE}` and `JL_PROBE_{PROBE}_ENABLED()` macros for every probe
+// defined in uprobes.d
+//
+// If the arguments to `JL_PROBE_{PROBE}` are expensive to compute, the call to
+// these functions must be guarded by a JL_PROBE_{PROBE}_ENABLED() check, to
+// minimize performance impact when probing is off. As an example:
+//
+//    if (JL_PROBE_GC_STOP_THE_WORLD_ENABLED())
+//        JL_PROBE_GC_STOP_THE_WORLD();
+
+#else
+// define a dummy version of the probe functions
+#define JL_PROBE_GC_BEGIN(collection) do ; while (0)
+#define JL_PROBE_GC_STOP_THE_WORLD() do ; while (0)
+#define JL_PROBE_GC_MARK_BEGIN() do ; while (0)
+#define JL_PROBE_GC_MARK_END(scanned_bytes, perm_scanned_bytes) do ; while (0)
+#define JL_PROBE_GC_SWEEP_BEGIN(full) do ; while (0)
+#define JL_PROBE_GC_SWEEP_END() do ; while (0)
+#define JL_PROBE_GC_END() do ; while (0)
+#define JL_PROBE_GC_FINALIZER() do ; while (0)
+
+#define JL_PROBE_GC_BEGIN_ENABLED() (0)
+#define JL_PROBE_GC_STOP_THE_WORLD_ENABLED() (0)
+#define JL_PROBE_GC_MARK_BEGIN_ENABLED() (0)
+#define JL_PROBE_GC_MARK_END_ENABLED() (0)
+#define JL_PROBE_GC_SWEEP_BEGIN_ENABLED() (0)
+#define JL_PROBE_GC_SWEEP_END_ENABLED()  (0)
+#define JL_PROBE_GC_END_ENABLED() (0)
+#define JL_PROBE_GC_FINALIZER_ENABLED() (0)
 #endif
 
 #endif

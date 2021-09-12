@@ -481,7 +481,7 @@ ifeq ($(LLVM_VER_PATCH), 0)
 $(eval $(call LLVM_PATCH,llvm-11-D85313-debuginfo-empty-arange)) # remove for LLVM 12
 $(eval $(call LLVM_PATCH,llvm-11-D90722-rtdyld-absolute-relocs)) # remove for LLVM 12
 endif # LLVM_VER 11.0.0
-$(eval $(call LLVM_PATCH,llvm-invalid-addrspacecast-sink)) # upstreamed as D92210
+$(eval $(call LLVM_PATCH,llvm-invalid-addrspacecast-sink)) # Still being upstreamed as D92210
 $(eval $(call LLVM_PATCH,llvm-11-D92906-ppc-setjmp)) # remove for LLVM 12
 $(eval $(call LLVM_PATCH,llvm-11-PR48458-X86ISelDAGToDAG)) # remove for LLVM 12
 $(eval $(call LLVM_PATCH,llvm-11-D93092-ppc-knownbits)) # remove for LLVM 12
@@ -506,15 +506,32 @@ $(eval $(call LLVM_PATCH,llvm-julia-tsan-custom-as))
 ifeq ($(BUILD_LLVM_CLANG),1)
 $(eval $(call LLVM_PATCH,llvm-D88630-clang-cmake))
 endif
+$(eval $(call LLVM_PATCH,llvm-invalid-addrspacecast-sink)) # Still being upstreamed as D92210
 $(eval $(call LLVM_PATCH,llvm-11-D93154-globalisel-as))
-$(eval $(call LLVM_PATCH,llvm-11-D94813-mergeicmps))
+$(eval $(call LLVM_PATCH,llvm-11-D94813-mergeicmps)) # remove for LLVM 14
 $(eval $(call LLVM_PROJ_PATCH,llvm-11-AArch64-FastIsel-bug))
 $(eval $(call LLVM_PATCH,llvm-12-D97435-AArch64-movaddrreg))
 $(eval $(call LLVM_PROJ_PATCH,llvm-11-D97571-AArch64-loh)) # remove for LLVM 13
 $(eval $(call LLVM_PROJ_PATCH,llvm-11-aarch64-addrspace)) # remove for LLVM 13
 $(eval $(call LLVM_PROJ_PATCH,llvm-12-fde-symbols-aarch64)) # remove for LLVM 13
 $(eval $(call LLVM_PROJ_PATCH,llvm-12-force-eh_frame-aarch64)) # remove for LLVM 13
+$(eval $(call LLVM_PROJ_PATCH,llvm-12-D109203-stackprobe-x86)) # remove for LLVM 14
 endif # LLVM_VER 12.0
+
+ifeq ($(LLVM_VER_SHORT),13.0)
+$(eval $(call LLVM_PATCH,llvm7-revert-D44485)) # Needs upstreaming
+# $(eval $(call LLVM_PROJ_PATCH,llvm-13-D75072-SCEV-add-type)) # Should no longer be necessary
+$(eval $(call LLVM_PATCH,llvm-julia-tsan-custom-as))
+ifeq ($(BUILD_LLVM_CLANG),1)
+$(eval $(call LLVM_PATCH,llvm-D88630-clang-cmake))
+endif
+$(eval $(call LLVM_PATCH,llvm-invalid-addrspacecast-sink)) # Still being upstreamed as D92210
+$(eval $(call LLVM_PATCH,llvm-11-D93154-globalisel-as))
+$(eval $(call LLVM_PATCH,llvm-11-D94813-mergeicmps)) # remove for LLVM 14
+$(eval $(call LLVM_PATCH,llvm-13-AArch64-FastIsel-bug))
+$(eval $(call LLVM_PATCH,llvm-13-D97435-AArch64-movaddrreg))
+$(eval $(call LLVM_PROJ_PATCH,llvm-13-D109203-stackprobe-x86)) # remove for LLVM 14 (nominated for backport)
+endif # LLVM_VER 13.0
 
 # Add a JL prefix to the version map. DO NOT REMOVE
 ifneq ($(LLVM_VER), svn)
