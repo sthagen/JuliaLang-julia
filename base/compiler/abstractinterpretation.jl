@@ -2171,7 +2171,6 @@ function widenreturn_noconditional(@nospecialize(rt))
     return widenconst(rt)
 end
 
-
 function handle_control_backedge!(frame::InferenceState, from::Int, to::Int)
     if from > to
         if is_effect_overridden(frame, :terminates_globally)
@@ -2332,9 +2331,9 @@ function typeinf_local(interp::AbstractInterpreter, frame::InferenceState)
                 if isa(fname, SlotNumber)
                     changes = StateUpdate(fname, VarState(Any, false), changes, false)
                 end
-            elseif hd === :code_coverage_effect ||
-                    (hd !== :boundscheck && # :boundscheck can be narrowed to Bool
-                    hd !== nothing && is_meta_expr_head(hd))
+            elseif hd === :code_coverage_effect || (
+                    hd !== :boundscheck && # :boundscheck can be narrowed to Bool
+                    is_meta_expr(stmt))
                 # these do not generate code
             else
                 t = abstract_eval_statement(interp, stmt, changes, frame)
@@ -2382,13 +2381,14 @@ function typeinf_local(interp::AbstractInterpreter, frame::InferenceState)
 end
 
 function conditional_changes(changes::VarTable, @nospecialize(typ), var::SlotNumber)
-    oldtyp = changes[slot_id(var)].typ
+    vtype = changes[slot_id(var)]
+    oldtyp = vtype.typ
     # approximate test for `typ ∩ oldtyp` being better than `oldtyp`
     # since we probably formed these types with `typesubstract`, the comparison is likely simple
     if ignorelimited(typ) ⊑ ignorelimited(oldtyp)
         # typ is better unlimited, but we may still need to compute the tmeet with the limit "causes" since we ignored those in the comparison
         oldtyp isa LimitedAccuracy && (typ = tmerge(typ, LimitedAccuracy(Bottom, oldtyp.causes)))
-        return StateUpdate(var, VarState(typ, false), changes, true)
+        return StateUpdate(var, VarState(typ, vtype.undef), changes, true)
     end
     return changes
 end
