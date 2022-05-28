@@ -4115,7 +4115,7 @@ const CONST_DICT = let d = Dict()
     end
     d
 end
-Base.@assume_effects :total_may_throw getcharid(c) = CONST_DICT[c]
+Base.@assume_effects :foldable getcharid(c) = CONST_DICT[c]
 @noinline callf(f, args...) = f(args...)
 function entry_to_be_invalidated(c)
     return callf(getcharid, c)
@@ -4139,5 +4139,17 @@ global glob_assign_int::Int = 0
 f_glob_assign_int() = global glob_assign_int += 1
 let effects = Base.infer_effects(f_glob_assign_int, ())
     @test !Core.Compiler.is_effect_free(effects)
+    @test Core.Compiler.is_nothrow(effects)
+end
+
+# Nothrow for setfield!
+mutable struct SetfieldNothrow
+    x::Int
+end
+f_setfield_nothrow() = SetfieldNothrow(0).x = 1
+let effects = Base.infer_effects(f_setfield_nothrow, ())
+    # Technically effect free even though we use the heap, since the
+    # object doesn't escape, but the compiler doesn't know that.
+    #@test Core.Compiler.is_effect_free(effects)
     @test Core.Compiler.is_nothrow(effects)
 end
