@@ -496,13 +496,13 @@ function abstract_call_method(interp::AbstractInterpreter, method::Method, @nosp
         add_remark!(interp, sv, "Refusing to infer into `depwarn`")
         return MethodCallResult(Any, false, false, nothing, Effects())
     end
-    topmost = nothing
+
     # Limit argument type tuple growth of functions:
     # look through the parents list to see if there's a call to the same method
     # and from the same method.
     # Returns the topmost occurrence of that repeated edge.
-    edgecycle = false
-    edgelimited = false
+    edgecycle = edgelimited = false
+    topmost = nothing
 
     for infstate in InfStackUnwind(sv)
         if method === infstate.linfo.def
@@ -827,8 +827,7 @@ function const_prop_enabled(interp::AbstractInterpreter, sv::InferenceState, mat
         add_remark!(interp, sv, "[constprop] Disabled by parameter")
         return false
     end
-    method = match.method
-    if method.constprop == 0x02
+    if is_no_constprop(match.method)
         add_remark!(interp, sv, "[constprop] Disabled by method parameter")
         return false
     end
@@ -1028,7 +1027,7 @@ function is_all_overridden((; fargs, argtypes)::ArgInfo, sv::InferenceState)
 end
 
 function force_const_prop(interp::AbstractInterpreter, @nospecialize(f), method::Method)
-    return method.constprop == 0x01 ||
+    return is_aggressive_constprop(method) ||
            InferenceParams(interp).aggressive_constant_propagation ||
            istopfunction(f, :getproperty) ||
            istopfunction(f, :setproperty!)
