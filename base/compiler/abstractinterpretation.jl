@@ -1094,7 +1094,7 @@ function const_prop_methodinstance_heuristic(
     # was able to cut it down to something simple (inlineable in particular).
     # If so, there's a good chance we might be able to const prop all the way
     # through and learn something new.
-    if isdefined(method, :source) && ccall(:jl_ir_flag_inlineable, Bool, (Any,), method.source)
+    if isdefined(method, :source) && is_inlineable(method.source)
         return true
     else
         flag = get_curr_ssaflag(sv)
@@ -2080,8 +2080,8 @@ function abstract_eval_statement(interp::AbstractInterpreter, @nospecialize(e), 
                 override.effect_free         ? ALWAYS_TRUE : effects.effect_free,
                 override.nothrow             ? ALWAYS_TRUE : effects.nothrow,
                 override.terminates_globally ? ALWAYS_TRUE : effects.terminates,
-                effects.nonoverlayed         ? true        : false,
-                override.notaskstate         ? ALWAYS_TRUE : effects.notaskstate)
+                override.notaskstate         ? ALWAYS_TRUE : effects.notaskstate,
+                effects.nonoverlayed         ? true        : false)
         end
         tristate_merge!(sv, effects)
     elseif ehead === :cfunction
