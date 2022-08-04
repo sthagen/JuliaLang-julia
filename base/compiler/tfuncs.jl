@@ -1845,11 +1845,38 @@ const _CONSISTENT_BUILTINS = Any[
     (<:),
     typeassert,
     throw,
-    setfield!
+    setfield!,
+]
+
+const _INACCESSIBLEMEM_BUILTINS = Any[
+    (<:),
+    (===),
+    apply_type,
+    arraysize,
+    Core.ifelse,
+    sizeof,
+    svec,
+    fieldtype,
+    isa,
+    isdefined,
+    nfields,
+    throw,
+    tuple,
+    typeassert,
+    typeof,
+]
+
+const _ARGMEM_BUILTINS = Any[
+    arrayref,
+    arrayset,
+    modifyfield!,
+    replacefield!,
+    setfield!,
+    swapfield!,
 ]
 
 const _SPECIAL_BUILTINS = Any[
-    Core._apply_iterate
+    Core._apply_iterate,
 ]
 
 function isdefined_effects(argtypes::Vector{Any})
@@ -1867,7 +1894,7 @@ function getfield_effects(argtypes::Vector{Any}, @nospecialize(rt))
     isempty(argtypes) && return EFFECTS_THROWS
     obj = argtypes[1]
     isvarargtype(obj) && return Effects(EFFECTS_THROWS; consistent=ALWAYS_FALSE)
-    consistent = is_immutable_argtype(obj) ? ALWAYS_TRUE : ALWAYS_FALSE
+    consistent = is_immutable_argtype(obj) ? ALWAYS_TRUE : CONSISTENT_IF_INACCESSIBLEMEMONLY
     # access to `isbitstype`-field initialized with undefined value leads to undefined behavior
     # so should taint `:consistent`-cy while access to uninitialized non-`isbitstype` field
     # throws `UndefRefError` so doesn't need to taint it
@@ -1891,11 +1918,18 @@ function getfield_effects(argtypes::Vector{Any}, @nospecialize(rt))
     else
         nothrow = getfield_nothrow(argtypes)
     end
-    return Effects(EFFECTS_TOTAL; consistent, nothrow)
+    if hasintersect(widenconst(obj), Module)
+        inaccessiblememonly = getglobal_effects(argtypes, rt).inaccessiblememonly
+    elseif is_mutation_free_argtype(obj)
+        inaccessiblememonly = ALWAYS_TRUE
+    else
+        inaccessiblememonly = INACCESSIBLEMEM_OR_ARGMEMONLY
+    end
+    return Effects(EFFECTS_TOTAL; consistent, nothrow, inaccessiblememonly)
 end
 
 function getglobal_effects(argtypes::Vector{Any}, @nospecialize(rt))
-    consistent = ALWAYS_FALSE
+    consistent = inaccessiblememonly = ALWAYS_FALSE
     nothrow = false
     if getglobal_nothrow(argtypes)
         nothrow = true
@@ -1903,9 +1937,12 @@ function getglobal_effects(argtypes::Vector{Any}, @nospecialize(rt))
         M, s = (argtypes[1]::Const).val::Module, (argtypes[2]::Const).val::Symbol
         if isconst(M, s)
             consistent = ALWAYS_TRUE
+            if is_mutation_free_argtype(rt)
+                inaccessiblememonly = ALWAYS_TRUE
+            end
         end
     end
-    return Effects(EFFECTS_TOTAL; consistent, nothrow)
+    return Effects(EFFECTS_TOTAL; consistent, nothrow, inaccessiblememonly)
 end
 
 function builtin_effects(f::Builtin, argtypes::Vector{Any}, @nospecialize(rt))
@@ -1923,9 +1960,22 @@ function builtin_effects(f::Builtin, argtypes::Vector{Any}, @nospecialize(rt))
         return getglobal_effects(argtypes, rt)
     else
         consistent = contains_is(_CONSISTENT_BUILTINS, f) ? ALWAYS_TRUE : ALWAYS_FALSE
-        effect_free = (contains_is(_EFFECT_FREE_BUILTINS, f) || contains_is(_PURE_BUILTINS, f))
+        if f === setfield! || f === arrayset
+            effect_free = EFFECT_FREE_IF_INACCESSIBLEMEMONLY
+        elseif contains_is(_EFFECT_FREE_BUILTINS, f) || contains_is(_PURE_BUILTINS, f)
+            effect_free = ALWAYS_TRUE
+        else
+            effect_free = ALWAYS_FALSE
+        end
         nothrow = (!(!isempty(argtypes) && isvarargtype(argtypes[end])) && builtin_nothrow(f, argtypes, rt))
-        return Effects(EFFECTS_TOTAL; consistent, effect_free, nothrow)
+        if contains_is(_INACCESSIBLEMEM_BUILTINS, f)
+            inaccessiblememonly = ALWAYS_TRUE
+        elseif contains_is(_ARGMEM_BUILTINS, f)
+            inaccessiblememonly = INACCESSIBLEMEM_OR_ARGMEMONLY
+        else
+            inaccessiblememonly = ALWAYS_FALSE
+        end
+        return Effects(EFFECTS_TOTAL; consistent, effect_free, nothrow, inaccessiblememonly)
     end
 end
 
@@ -2099,7 +2149,7 @@ function intrinsic_effects(f::IntrinsicFunction, argtypes::Vector{Any})
         f === Intrinsics.have_fma ||        # this one depends on the runtime environment
         f === Intrinsics.cglobal            # cglobal lookup answer changes at runtime
         ) ? ALWAYS_TRUE : ALWAYS_FALSE
-    effect_free = !(f === Intrinsics.pointerset)
+    effect_free = !(f === Intrinsics.pointerset) ? ALWAYS_TRUE : ALWAYS_FALSE
     nothrow = (!(!isempty(argtypes) && isvarargtype(argtypes[end])) && intrinsic_nothrow(f, argtypes))
 
     return Effects(EFFECTS_TOTAL; consistent, effect_free, nothrow)
