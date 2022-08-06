@@ -301,6 +301,9 @@ end |> !Core.Compiler.is_nothrow
     Core.svec(nothing, 1, "foo")
 end |> Core.Compiler.is_consistent
 
+# fastmath operations are inconsistent
+@test !Core.Compiler.is_consistent(Base.infer_effects((a,b)->@fastmath(a+b), (Float64,Float64)))
+
 # issue 46122: @assume_effects for @ccall
 @test Base.infer_effects((Vector{Int},)) do a
     Base.@assume_effects :effect_free @ccall jl_array_ptr(a::Any)::Ptr{Int}
@@ -491,3 +494,42 @@ end
     getfield(@__MODULE__, :global_ref)[] = nothing
 end
 @test !Core.Compiler.is_removable_if_unused(Base.infer_effects(unremovable_if_unused3!))
+
+@testset "effects analysis on array ops" begin
+
+@testset "effects analysis on array construction" begin
+
+@noinline construct_array(@nospecialize(T), args...) = Array{T}(undef, args...)
+
+# should eliminate safe but dead allocations
+let good_dims = 1:10
+    for dim in good_dims, N in 0:10
+        dims = ntuple(i->dim, N)
+        @test @eval Base.infer_effects() do
+            $construct_array(Int, $(dims...))
+        end |> Core.Compiler.is_removable_if_unused
+        @test @eval fully_eliminated() do
+            $construct_array(Int, $(dims...))
+            nothing
+        end
+    end
+end
+
+# should analyze throwness correctly
+let bad_dims = [-1, typemax(Int)]
+    for dim in bad_dims, N in 1:10
+        dims = ntuple(i->dim, N)
+        @test @eval Base.infer_effects() do
+            $construct_array(Int, $(dims...))
+        end |> !Core.Compiler.is_removable_if_unused
+        @test @eval !fully_eliminated() do
+            $construct_array(Int, $(dims...))
+            nothing
+        end
+        @test_throws "invalid Array" @eval $construct_array(Int, $(dims...))
+    end
+end
+
+end # @testset "effects analysis on array construction" begin
+
+end # @testset "effects analysis on array ops" begin
