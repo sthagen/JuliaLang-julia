@@ -330,7 +330,7 @@ struct NonIsBitsDims
     dims::NTuple{N, Int} where N
 end
 NonIsBitsDims() = NonIsBitsDims(())
-@test fully_eliminated(NonIsBitsDims, (); retval=QuoteNode(NonIsBitsDims()))
+@test fully_eliminated(NonIsBitsDims, (); retval=NonIsBitsDims())
 
 struct NonIsBitsDimsUndef
     dims::NTuple{N, Int} where N
@@ -625,7 +625,7 @@ let
         specs = collect(only(methods(f42078)).specializations)
         mi = specs[findfirst(!isnothing, specs)]::Core.MethodInstance
         codeinf = getcache(mi)::Core.CodeInstance
-        codeinf.inferred = nothing
+        @atomic codeinf.inferred = nothing
     end
 
     let # inference should re-infer `f42078(::Int)` and we should get the same code
@@ -986,13 +986,6 @@ Base.@constprop :aggressive function conditional_escape!(cnd, x)
 end
 @test fully_eliminated((String,)) do x
     @invoke conditional_escape!(false::Any, x::Any)
-end
-
-@testset "strides for ReshapedArray (PR#44027)" begin
-    # Type-based contiguous check
-    a = vec(reinterpret(reshape,Int16,reshape(view(reinterpret(Int32,randn(10)),2:11),5,:)))
-    f(a) = only(strides(a));
-    @test fully_eliminated(f, Tuple{typeof(a)}) && f(a) == 1
 end
 
 @testset "elimination of `get_binding_type`" begin
