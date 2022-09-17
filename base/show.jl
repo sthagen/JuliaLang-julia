@@ -434,8 +434,8 @@ Julia code when possible.
 
 [`repr`](@ref) returns the output of `show` as a string.
 
-To customize human-readable text output for objects of type `T`, define
-`show(io::IO, ::MIME"text/plain", ::T)` instead. Checking the `:compact`
+For a more verbose human-readable text output for objects of type `T`, define
+`show(io::IO, ::MIME"text/plain", ::T)` in addition. Checking the `:compact`
 [`IOContext`](@ref) property of `io` in such methods is recommended,
 since some containers show their elements by calling this method with
 `:compact => true`.
@@ -1838,9 +1838,10 @@ function allow_macroname(ex)
     end
 end
 
-function is_core_macro(arg, macro_name::AbstractString)
-    arg === GlobalRef(Core, Symbol(macro_name))
+function is_core_macro(arg::GlobalRef, macro_name::AbstractString)
+    arg == GlobalRef(Core, Symbol(macro_name))
 end
+is_core_macro(@nospecialize(arg), macro_name::AbstractString) = false
 
 # symbol for IOContext flag signaling whether "begin" is treated
 # as an ordinary symbol, which is true in indexing expressions.
