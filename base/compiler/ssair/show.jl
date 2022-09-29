@@ -736,7 +736,7 @@ function inline_linfo_printer(code::IRCode)
         end
         # Print location information right aligned. If the line below is too long, it'll overwrite this,
         # but that's what we want.
-        if get(io, :color, false)
+        if get(io, :color, false)::Bool
             method_start_column = cols - max_method_width - max_loc_width - 2
             filler = " "^(max_loc_width-length(annotation))
             printstyled(io, "\e[$(method_start_column)G$(annotation)$(filler)$(loc_method)\e[1G", color = :light_black)
@@ -855,13 +855,14 @@ function show_ir(io::IO, compact::IncrementalCompact, config::IRShowConfig=defau
     end
 
     # Print uncompacted nodes from the original IR
+
+    # print a separator
     stmts = compact.ir.stmts
+    indent = length(string(length(stmts)))
+    # config.line_info_preprinter(io, "", compact.idx)
+    printstyled(io, "─"^(width-indent-1), '\n', color=:red)
+
     pop_new_node! = new_nodes_iter(compact.ir)
-    if compact.idx < length(stmts)
-        indent = length(string(length(stmts)))
-        # config.line_info_preprinter(io, "", compact.idx)
-        printstyled(io, "─"^(width-indent-1), '\n', color=:red)
-    end
     let io = IOContext(io, :maxssaid=>length(compact.ir.stmts))
         show_ir_stmts(io, compact.ir, compact.idx:length(stmts), config, used_uncompacted, cfg, bb_idx; pop_new_node!)
     end

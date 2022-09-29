@@ -232,12 +232,10 @@ end
 
 function get_updated_dict(p::TOML.Parser, f::CachedTOMLDict)
     s = stat(f.path)
-    time_since_cached = time() - f.mtime
-    rough_mtime_granularity = 0.1 # seconds
-    # In case the file is being updated faster than the mtime granularity,
-    # and have the same size after the update we might miss that it changed. Therefore
-    # always check the hash in case we recently created the cache.
-    if time_since_cached < rough_mtime_granularity || s.inode != f.inode || s.mtime != f.mtime || f.size != s.size
+    # note, this might miss very rapid in-place updates, such that mtime is
+    # identical but that is solvable by not doing in-place updates, and not
+    # rapidly changing these files
+    if s.inode != f.inode || s.mtime != f.mtime || f.size != s.size
         content = read(f.path)
         new_hash = _crc32c(content)
         if new_hash != f.hash
@@ -1684,12 +1682,14 @@ function create_expr_cache(pkg::PkgId, input::String, output::String, concrete_d
     deps_eltype = sprint(show, eltype(concrete_deps); context = :module=>nothing)
     deps = deps_eltype * "[" * join(deps_strs, ",") * "]"
     trace = isassigned(PRECOMPILE_TRACE_COMPILE) ? `--trace-compile=$(PRECOMPILE_TRACE_COMPILE[])` : ``
-    io = open(pipeline(`$(julia_cmd()::Cmd) -O0
-                       --output-ji $output --output-incremental=yes
-                       --startup-file=no --history-file=no --warn-overwrite=yes
-                       --color=$(have_color === nothing ? "auto" : have_color ? "yes" : "no")
-                       $trace
-                       -`, stderr = internal_stderr, stdout = internal_stdout),
+    io = open(pipeline(addenv(`$(julia_cmd()::Cmd) -O0
+                              --output-ji $output --output-incremental=yes
+                              --startup-file=no --history-file=no --warn-overwrite=yes
+                              --color=$(have_color === nothing ? "auto" : have_color ? "yes" : "no")
+                              $trace
+                              -`,
+                              "OPENBLAS_NUM_THREADS" => 1),
+                       stderr = internal_stderr, stdout = internal_stdout),
               "w", stdout)
     # write data over stdin to avoid the (unlikely) case of exceeding max command line size
     write(io.in, """
