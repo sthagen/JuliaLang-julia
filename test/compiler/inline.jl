@@ -1709,3 +1709,55 @@ let src = code_typed1((Any,)) do x
     end
     @test count(iscall((src, f_union_unmatched)), src.code) == 0
 end
+
+# modifyfield! handling
+# =====================
+
+isinvokemodify(y) = @nospecialize(x) -> isinvokemodify(y, x)
+isinvokemodify(sym::Symbol, @nospecialize(x)) = isinvokemodify(mi->mi.def.name===sym, x)
+isinvokemodify(pred::Function, @nospecialize(x)) = isexpr(x, :invoke_modify) && pred(x.args[1]::MethodInstance)
+
+mutable struct Atomic{T}
+    @atomic x::T
+end
+let src = code_typed1((Atomic{Int},)) do a
+        @atomic a.x + 1
+    end
+    @test count(isinvokemodify(:+), src.code) == 1
+end
+let src = code_typed1((Atomic{Int},)) do a
+        @atomic a.x += 1
+    end
+    @test count(isinvokemodify(:+), src.code) == 1
+end
+let src = code_typed1((Atomic{Int},)) do a
+        @atomic a.x max 10
+    end
+    @test count(isinvokemodify(:max), src.code) == 1
+end
+# simple union split handling
+mymax(x::T, y::T) where T<:Real = max(x, y)
+mymax(x::T, y::Real) where T<:Real = convert(T, max(x, y))::T
+let src = code_typed1((Atomic{Int},Union{Int,Float64})) do a, b
+        @atomic a.x mymax b
+    end
+    @test count(isinvokemodify(:mymax), src.code) == 2
+end
+
+# apply `ssa_inlining_pass` multiple times
+let interp = Core.Compiler.NativeInterpreter()
+    # check if callsite `@noinline` annotation works
+    ir, = Base.code_ircode((Int,Int); optimize_until="inlining", interp) do a, b
+        @noinline a*b
+    end |> only
+    i = findfirst(isinvoke(:*), ir.stmts.inst)
+    @test i !== nothing
+
+    # ok, now delete the callsite flag, and see the second inlining pass can inline the call
+    @eval Core.Compiler $ir.stmts[$i][:flag] &= ~IR_FLAG_NOINLINE
+    inlining = Core.Compiler.InliningState(Core.Compiler.OptimizationParams(interp), nothing,
+        Core.Compiler.code_cache(interp), interp)
+    ir = Core.Compiler.ssa_inlining_pass!(ir, inlining, false)
+    @test count(isinvoke(:*), ir.stmts.inst) == 0
+    @test count(iscall((ir, Core.Intrinsics.mul_int)), ir.stmts.inst) == 1
+end
