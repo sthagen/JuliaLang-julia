@@ -72,7 +72,7 @@ function try_compute_fieldidx_stmt(ir::Union{IncrementalCompact,IRCode}, stmt::E
     return try_compute_fieldidx(typ, field)
 end
 
-function find_curblock(domtree::DomTree, allblocks::Vector{Int}, curblock::Int)
+function find_curblock(domtree::DomTree, allblocks::BitSet, curblock::Int)
     # TODO: This can be much faster by looking at current level and only
     # searching for those blocks in a sorted order
     while !(curblock in allblocks) && curblock !== 0
@@ -92,7 +92,7 @@ function val_for_def_expr(ir::IRCode, def::Int, fidx::Int)
     end
 end
 
-function compute_value_for_block(ir::IRCode, domtree::DomTree, allblocks::Vector{Int}, du::SSADefUse, phinodes::IdDict{Int, SSAValue}, fidx::Int, curblock::Int)
+function compute_value_for_block(ir::IRCode, domtree::DomTree, allblocks::BitSet, du::SSADefUse, phinodes::IdDict{Int, SSAValue}, fidx::Int, curblock::Int)
     curblock = find_curblock(domtree, allblocks, curblock)
     def = 0
     for stmt in du.defs
@@ -103,7 +103,7 @@ function compute_value_for_block(ir::IRCode, domtree::DomTree, allblocks::Vector
     def == 0 ? phinodes[curblock] : val_for_def_expr(ir, def, fidx)
 end
 
-function compute_value_for_use(ir::IRCode, domtree::DomTree, allblocks::Vector{Int},
+function compute_value_for_use(ir::IRCode, domtree::DomTree, allblocks::BitSet,
     du::SSADefUse, phinodes::IdDict{Int, SSAValue}, fidx::Int, use::Int)
     def, useblock, curblock = find_def_for_use(ir, domtree, allblocks, du, use)
     if def == 0
@@ -122,7 +122,7 @@ end
 # even when the allocation contains an uninitialized field, we try an extra effort to check
 # if this load at `idx` have any "safe" `setfield!` calls that define the field
 function has_safe_def(
-    ir::IRCode, domtree::DomTree, allblocks::Vector{Int}, du::SSADefUse,
+    ir::IRCode, domtree::DomTree, allblocks::BitSet, du::SSADefUse,
     newidx::Int, idx::Int)
     def, _, _ = find_def_for_use(ir, domtree, allblocks, du, idx)
     # will throw since we already checked this `:new` site doesn't define this field
@@ -157,7 +157,7 @@ end
 
 # find the first dominating def for the given use
 function find_def_for_use(
-    ir::IRCode, domtree::DomTree, allblocks::Vector{Int}, du::SSADefUse, use::Int, inclusive::Bool=false)
+    ir::IRCode, domtree::DomTree, allblocks::BitSet, du::SSADefUse, use::Int, inclusive::Bool=false)
     useblock = block_for_inst(ir.cfg, use)
     curblock = find_curblock(domtree, allblocks, useblock)
     local def = 0
@@ -1156,7 +1156,7 @@ function try_resolve_finalizer!(ir::IRCode, idx::Int, finalizer_idx::Int, defuse
             bb_insert_block, usebb)
         if new_bb_insert_block == bb_insert_block == usebb
             if bb_insert_idx !== nothing
-                bb_insert_idx = max(bb_insert_idx, useidx)
+                bb_insert_idx = max(bb_insert_idx::Int, useidx)
             else
                 bb_insert_idx = useidx
             end
@@ -1320,7 +1320,7 @@ function sroa_mutables!(ir::IRCode, defuses::IdDict{Int, Tuple{SPCSet, SSADefUse
         # but we should come up with semantics for well defined semantics
         # for uninitialized fields first.
         ndefuse = length(fielddefuse)
-        blocks = Vector{Tuple{#=phiblocks=# Vector{Int}, #=allblocks=# Vector{Int}}}(undef, ndefuse)
+        blocks = Vector{Tuple{#=phiblocks=# Vector{Int}, #=allblocks=# BitSet}}(undef, ndefuse)
         for fidx in 1:ndefuse
             du = fielddefuse[fidx]
             isempty(du.uses) && continue
@@ -1331,7 +1331,7 @@ function sroa_mutables!(ir::IRCode, defuses::IdDict{Int, Tuple{SPCSet, SSADefUse
             else
                 phiblocks = iterated_dominance_frontier(ir.cfg, ldu, get!(lazydomtree))
             end
-            allblocks = sort!(vcat(phiblocks, ldu.def_bbs); alg=QuickSort)
+            allblocks = union!(BitSet(phiblocks), ldu.def_bbs)
             blocks[fidx] = phiblocks, allblocks
             if fidx + 1 > length(defexpr.args)
                 for i = 1:length(du.uses)
@@ -1727,6 +1727,8 @@ function type_lift_pass!(ir::IRCode)
                         first = false
                     end
                     local id::Int = 0
+                    all_same = true
+                    local last_val
                     for i = 1:length(values)
                         if !isassigned(def.values, i)
                             val = false
@@ -1757,6 +1759,8 @@ function type_lift_pass!(ir::IRCode)
                                         if haskey(processed, id)
                                             val = processed[id]
                                         else
+                                            # TODO: Re-check after convergence whether all the values are the same
+                                            all_same = false
                                             push!(worklist, (id, up_id, new_phi::SSAValue, i))
                                             continue
                                         end
@@ -1767,17 +1771,26 @@ function type_lift_pass!(ir::IRCode)
                             end
                         end
                         if isa(def, PhiNode)
+                            if !@isdefined(last_val)
+                                last_val = val
+                            elseif all_same
+                                all_same &= last_val === val
+                            end
                             values[i] = val
                         else
                             values[i] = insert_node!(ir, up_id, NewInstruction(UpsilonNode(val), Bool))
                         end
                     end
+                    if all_same && @isdefined(last_val)
+                        # Decay the PhiNode back to the single value
+                        ir[new_phi][:inst] = last_val
+                        isa(last_val, Bool) && (processed[item] = last_val)
+                    end
                     if which !== SSAValue(0)
                         phi = ir[which][:inst]
                         if isa(phi, PhiNode)
                             phi.values[use] = new_phi
-                        else
-                            phi = phi::PhiCNode
+                        elseif isa(phi, PhiCNode)
                             phi.values[use] = insert_node!(ir, w_up_id, NewInstruction(UpsilonNode(new_phi), Bool))
                         end
                     end
