@@ -796,6 +796,21 @@ let m = Meta.@lower 1 + 1
     @test length(ir.cfg.blocks) == 1
 end
 
+# `cfg_simplify!` shouldn't error in a presence of `try/catch` block
+let ir = Base.code_ircode(; optimize_until="slot2ssa") do
+        v = try
+        catch
+        end
+        v
+    end |> only |> first
+    Core.Compiler.verify_ir(ir)
+    nb = length(ir.cfg.blocks)
+    ir = Core.Compiler.cfg_simplify!(ir)
+    Core.Compiler.verify_ir(ir)
+    na = length(ir.cfg.blocks)
+    @test na < nb
+end
+
 # Issue #29213
 function f_29213()
     while true
@@ -1092,3 +1107,13 @@ let src = code_typed1(foo_defined_last_iter, Tuple{Int})
         end
     end
 end
+
+# Issue #47180, incorrect phi counts in CmdRedirect
+function a47180(b; stdout )
+    c = setenv(b, b.env)
+    if true
+        c = pipeline(c, stdout)
+    end
+    c
+end
+@test isa(a47180(``; stdout), Base.AbstractCmd)
