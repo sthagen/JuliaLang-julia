@@ -179,28 +179,27 @@ function ir_to_codeinf!(opt::OptimizationState)
     optdef = linfo.def
     replace_code_newstyle!(src, opt.ir::IRCode, isa(optdef, Method) ? Int(optdef.nargs) : 0)
     opt.ir = nothing
-    widen_all_consts!(src)
+    widencompileronly!(src)
+    src.rettype = widenconst(src.rettype)
     src.inferred = true
     # finish updating the result struct
     validate_code_in_debug_mode(linfo, src, "optimized")
     return src
 end
 
-# widen all Const elements in type annotations
-function widen_all_consts!(src::CodeInfo)
+# widen extended lattice elements in type annotations so that they are recognizable by the codegen system.
+function widencompileronly!(src::CodeInfo)
     ssavaluetypes = src.ssavaluetypes::Vector{Any}
     for i = 1:length(ssavaluetypes)
-        ssavaluetypes[i] = widenconst(ssavaluetypes[i])
+        ssavaluetypes[i] = widencompileronly(ssavaluetypes[i])
     end
 
     for i = 1:length(src.code)
         x = src.code[i]
         if isa(x, PiNode)
-            src.code[i] = PiNode(x.val, widenconst(x.typ))
+            src.code[i] = PiNode(x.val, widencompileronly(x.typ))
         end
     end
-
-    src.rettype = widenconst(src.rettype)
 
     return src
 end
@@ -650,7 +649,7 @@ function convert_to_ircode(ci::CodeInfo, sv::OptimizationState)
                 insert!(codelocs, idx + 1, codelocs[idx])
                 insert!(ssavaluetypes, idx + 1, Union{})
                 insert!(stmtinfo, idx + 1, NoCallInfo())
-                insert!(ssaflags, idx + 1, ssaflags[idx])
+                insert!(ssaflags, idx + 1, IR_FLAG_NOTHROW)
                 if ssachangemap === nothing
                     ssachangemap = fill(0, nstmts)
                 end

@@ -4,7 +4,7 @@ module Sort
 
 using Base.Order
 
-using Base: copymutable, midpoint, require_one_based_indexing,
+using Base: copymutable, midpoint, require_one_based_indexing, uinttype,
     sub_with_overflow, add_with_overflow, OneTo, BitSigned, BitIntegerType
 
 import Base:
@@ -611,9 +611,6 @@ struct IEEEFloatOptimization{T <: Algorithm} <: Algorithm
     next::T
 end
 
-UIntType(::Type{Float16}) = UInt16
-UIntType(::Type{Float32}) = UInt32
-UIntType(::Type{Float64}) = UInt64
 after_zero(::ForwardOrdering, x) = !signbit(x)
 after_zero(::ReverseOrdering, x) = signbit(x)
 is_concrete_IEEEFloat(T::Type) = T <: Base.IEEEFloat && isconcretetype(T)
@@ -621,7 +618,7 @@ function _sort!(v::AbstractVector, a::IEEEFloatOptimization, o::Ordering, kw)
     @getkw lo hi
     if is_concrete_IEEEFloat(eltype(v)) && o isa DirectOrdering
         lo, hi = send_to_end!(isnan, v, o, true; lo, hi)
-        iv = reinterpret(UIntType(eltype(v)), v)
+        iv = reinterpret(uinttype(eltype(v)), v)
         j = send_to_end!(x -> after_zero(o, x), v; lo, hi)
         scratch = _sort!(iv, a.next, Reverse, (;kw..., lo, hi=j))
         if scratch === nothing # Union split
@@ -631,7 +628,7 @@ function _sort!(v::AbstractVector, a::IEEEFloatOptimization, o::Ordering, kw)
         end
     elseif eltype(v) <: Integer && o isa Perm && o.order isa DirectOrdering && is_concrete_IEEEFloat(eltype(o.data))
         lo, hi = send_to_end!(i -> isnan(@inbounds o.data[i]), v, o.order, true; lo, hi)
-        ip = reinterpret(UIntType(eltype(o.data)), o.data)
+        ip = reinterpret(uinttype(eltype(o.data)), o.data)
         j = send_to_end!(i -> after_zero(o.order, @inbounds o.data[i]), v; lo, hi)
         scratch = _sort!(v, a.next, Perm(Reverse, ip), (;kw..., lo, hi=j))
         if scratch === nothing # Union split
@@ -998,7 +995,8 @@ select_pivot(lo::Integer, hi::Integer) = typeof(hi-lo)(hash(lo) % (hi-lo+1)) + l
 #
 # returns (pivot, pivot_index) where pivot_index is the location the pivot
 # should end up, but does not set t[pivot_index] = pivot
-function partition!(t::AbstractVector, lo::Integer, hi::Integer, offset::Integer, o::Ordering, v::AbstractVector, rev::Bool)
+function partition!(t::AbstractVector, lo::Integer, hi::Integer, offset::Integer, o::Ordering,
+        v::AbstractVector, rev::Bool, pivot_dest::AbstractVector, pivot_index_offset::Integer)
     pivot_index = select_pivot(lo, hi)
     @inbounds begin
         pivot = v[pivot_index]
@@ -1016,14 +1014,16 @@ function partition!(t::AbstractVector, lo::Integer, hi::Integer, offset::Integer
             offset += fx
             lo += 1
         end
+        pivot_index = lo-offset + pivot_index_offset
+        pivot_dest[pivot_index] = pivot
     end
 
-    # pivot_index = lo-offset
-    # t[pivot_index] is whatever it was before
-    # t[<pivot_index] <* pivot, stable
-    # t[>pivot_index] >* pivot, reverse stable
+    # t_pivot_index = lo-offset (i.e. without pivot_index_offset)
+    # t[t_pivot_index] is whatever it was before unless t is the pivot_dest
+    # t[<t_pivot_index] <* pivot, stable
+    # t[>t_pivot_index] >* pivot, reverse stable
 
-    pivot, lo-offset
+    pivot_index
 end
 
 function _sort!(v::AbstractVector, a::QuickerSort, o::Ordering, kw;
@@ -1037,9 +1037,11 @@ function _sort!(v::AbstractVector, a::QuickerSort, o::Ordering, kw;
     end
 
     while lo < hi && hi - lo > SMALL_THRESHOLD
-        pivot, j = swap ? partition!(v, lo+offset, hi+offset, offset, o, t, rev) : partition!(t, lo, hi, -offset, o, v, rev)
-        j -= !swap*offset
-        @inbounds v[j] = pivot
+        j = if swap
+            partition!(v, lo+offset, hi+offset, offset, o, t, rev, v, 0)
+        else
+            partition!(t, lo, hi, -offset, o, v, rev, v, -offset)
+        end
         swap = !swap
 
         # For QuickerSort(), a.lo === a.hi === missing, so the first two branches get skipped
@@ -1433,25 +1435,18 @@ julia> v[p]
 ```
 """
 partialsortperm(v::AbstractVector, k::Union{Integer,OrdinalRange}; kwargs...) =
-    partialsortperm!(similar(Vector{eltype(k)}, axes(v,1)), v, k; kwargs..., initialized=false)
+    partialsortperm!(similar(Vector{eltype(k)}, axes(v,1)), v, k; kwargs...)
 
 """
-    partialsortperm!(ix, v, k; by=<transform>, lt=<comparison>, rev=false, initialized=false)
+    partialsortperm!(ix, v, k; by=<transform>, lt=<comparison>, rev=false)
 
 Like [`partialsortperm`](@ref), but accepts a preallocated index vector `ix` the same size as
 `v`, which is used to store (a permutation of) the indices of `v`.
 
-If the index vector `ix` is initialized with the indices of `v` (or a permutation thereof), `initialized` should be set to
-`true`.
-
-If `initialized` is `false` (the default), then `ix` is initialized to contain the indices of `v`.
-
-If `initialized` is `true`, but `ix` does not contain (a permutation of) the indices of `v`, the behavior of
-`partialsortperm!` is undefined.
+`ix` is initialized to contain the indices of `v`.
 
 (Typically, the indices of `v` will be `1:length(v)`, although if `v` has an alternative array type
-with non-one-based indices, such as an `OffsetArray`, `ix` must also be an `OffsetArray` with the same
-indices, and must contain as values (a permutation of) these same indices.)
+with non-one-based indices, such as an `OffsetArray`, `ix` must share those same indices)
 
 Upon return, `ix` is guaranteed to have the indices `k` in their sorted positions, such that
 
@@ -1474,7 +1469,7 @@ julia> partialsortperm!(ix, v, 1)
 
 julia> ix = [1:4;];
 
-julia> partialsortperm!(ix, v, 2:3, initialized=true)
+julia> partialsortperm!(ix, v, 2:3)
 2-element view(::Vector{Int64}, 2:3) with eltype Int64:
  4
  3
@@ -1491,10 +1486,8 @@ function partialsortperm!(ix::AbstractVector{<:Integer}, v::AbstractVector,
         throw(ArgumentError("The index vector is used as scratch space and must have the " *
                             "same length/indices as the source vector, $(axes(ix,1)) != $(axes(v,1))"))
     end
-    if !initialized
-        @inbounds for i in eachindex(ix)
-            ix[i] = i
-        end
+    @inbounds for i in eachindex(ix)
+        ix[i] = i
     end
 
     # do partial quicksort
@@ -1560,8 +1553,14 @@ function sortperm(A::AbstractArray;
                   order::Ordering=Forward,
                   scratch::Union{Vector{<:Integer}, Nothing}=nothing,
                   dims...) #to optionally specify dims argument
-    ordr = ord(lt,by,rev,order)
-    if ordr === Forward && isa(A,Vector) && eltype(A)<:Integer
+    if rev === true
+        _sortperm(A; alg, order=ord(lt, by, true, order), scratch, dims...)
+    else
+        _sortperm(A; alg, order=ord(lt, by, nothing, order), scratch, dims...)
+    end
+end
+function _sortperm(A::AbstractArray; alg, order, scratch, dims...)
+    if order === Forward && isa(A,Vector) && eltype(A)<:Integer
         n = length(A)
         if n > 1
             min, max = extrema(A)
@@ -1573,15 +1572,15 @@ function sortperm(A::AbstractArray;
         end
     end
     ix = copymutable(LinearIndices(A))
-    sort!(ix; alg, order = Perm(ordr, vec(A)), scratch, dims...)
+    sort!(ix; alg, order = Perm(order, vec(A)), scratch, dims...)
 end
 
 
 """
-    sortperm!(ix, A; alg::Algorithm=DEFAULT_UNSTABLE, lt=isless, by=identity, rev::Bool=false, order::Ordering=Forward, initialized::Bool=false, [dims::Integer])
+    sortperm!(ix, A; alg::Algorithm=DEFAULT_UNSTABLE, lt=isless, by=identity, rev::Bool=false, order::Ordering=Forward, [dims::Integer])
 
-Like [`sortperm`](@ref), but accepts a preallocated index vector or array `ix` with the same `axes` as `A`.  If `initialized` is `false`
-(the default), `ix` is initialized to contain the values `LinearIndices(A)`.
+Like [`sortperm`](@ref), but accepts a preallocated index vector or array `ix` with the same `axes` as `A`.
+`ix` is initialized to contain the values `LinearIndices(A)`.
 
 !!! compat "Julia 1.9"
     The method accepting `dims` requires at least Julia 1.9.
@@ -1615,7 +1614,7 @@ julia> sortperm!(p, A; dims=2); p
  2  4
 ```
 """
-function sortperm!(ix::AbstractArray{T}, A::AbstractArray;
+@inline function sortperm!(ix::AbstractArray{T}, A::AbstractArray;
                    alg::Algorithm=DEFAULT_UNSTABLE,
                    lt=isless,
                    by=identity,
@@ -1627,10 +1626,12 @@ function sortperm!(ix::AbstractArray{T}, A::AbstractArray;
     (typeof(A) <: AbstractVector) == (:dims in keys(dims)) && throw(ArgumentError("Dims argument incorrect for type $(typeof(A))"))
     axes(ix) == axes(A) || throw(ArgumentError("index array must have the same size/axes as the source array, $(axes(ix)) != $(axes(A))"))
 
-    if !initialized
-        ix .= LinearIndices(A)
+    ix .= LinearIndices(A)
+    if rev === true
+        sort!(ix; alg, order=Perm(ord(lt, by, true, order), vec(A)), scratch, dims...)
+    else
+        sort!(ix; alg, order=Perm(ord(lt, by, nothing, order), vec(A)), scratch, dims...)
     end
-    sort!(ix; alg, order = Perm(ord(lt, by, rev, order), vec(A)), scratch, dims...)
 end
 
 # sortperm for vectors of few unique integers
