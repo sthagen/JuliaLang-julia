@@ -145,7 +145,7 @@ static _Atomic(int) support_conservative_marking = 0;
  * threads that enters `jl_gc_collect()` at the same time (or later calling
  * from unmanaged code) will wait in `jl_gc_collect()` until the GC is finished.
  *
- * Before starting the mark phase the GC thread calls `jl_safepoint_gc_start()`
+ * Before starting the mark phase the GC thread calls `jl_safepoint_start_gc()`
  * and `jl_gc_wait_for_the_world()`
  * to make sure all the thread are in a safe state for the GC. The function
  * activates the safepoint and wait for all the threads to get ready for the
@@ -2958,6 +2958,7 @@ static void jl_gc_queue_thread_local(jl_gc_mark_cache_t *gc_cache, jl_gc_mark_sp
 }
 
 extern jl_value_t *cmpswap_names JL_GLOBALLY_ROOTED;
+extern jl_task_t *wait_empty JL_GLOBALLY_ROOTED;
 
 // mark the initial root set
 static void mark_roots(jl_gc_mark_cache_t *gc_cache, jl_gc_mark_sp_t *sp)
@@ -2996,6 +2997,8 @@ static void mark_roots(jl_gc_mark_cache_t *gc_cache, jl_gc_mark_sp_t *sp)
     gc_mark_queue_obj(gc_cache, sp, jl_emptytuple_type);
     if (cmpswap_names != NULL)
         gc_mark_queue_obj(gc_cache, sp, cmpswap_names);
+    if (wait_empty != NULL)
+        gc_mark_queue_obj(gc_cache, sp, wait_empty);
     gc_mark_queue_obj(gc_cache, sp, jl_global_roots_table);
 }
 
