@@ -2850,16 +2850,6 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
             gc_cblist_root_scanner, (collection));
     }
     gc_mark_loop(ptls);
-    gc_num.since_sweep += gc_num.allocd;
-    JL_PROBE_GC_MARK_END(scanned_bytes, perm_scanned_bytes);
-    gc_settime_premark_end();
-    gc_time_mark_pause(gc_start_time, scanned_bytes, perm_scanned_bytes);
-    uint64_t end_mark_time = jl_hrtime();
-    uint64_t mark_time = end_mark_time - start_mark_time;
-    gc_num.mark_time = mark_time;
-    gc_num.total_mark_time += mark_time;
-    int64_t actual_allocd = gc_num.since_sweep;
-    // marking is over
 
     // 4. check for objects to finalize
     clear_weak_refs();
@@ -2897,7 +2887,18 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
     gc_mark_finlist(mq, &to_finalize, 0);
     gc_mark_loop(ptls);
     mark_reset_age = 0;
+
+    gc_num.since_sweep += gc_num.allocd;
+    JL_PROBE_GC_MARK_END(scanned_bytes, perm_scanned_bytes);
+    gc_settime_premark_end();
+    gc_time_mark_pause(gc_start_time, scanned_bytes, perm_scanned_bytes);
+    uint64_t end_mark_time = jl_hrtime();
+    uint64_t mark_time = end_mark_time - start_mark_time;
+    gc_num.mark_time = mark_time;
+    gc_num.total_mark_time += mark_time;
+    int64_t actual_allocd = gc_num.since_sweep;
     gc_settime_postmark_end();
+    // marking is over
 
     // Flush everything in mark cache
     gc_sync_all_caches_nolock(ptls);
@@ -3251,14 +3252,9 @@ void jl_gc_init(void)
     uint64_t constrained_mem = uv_get_constrained_memory();
     if (constrained_mem > 0 && constrained_mem < total_mem)
         total_mem = constrained_mem;
+    max_total_memory = total_mem / 10 * 6;
 #endif
 
-    // We allocate with abandon until we get close to the free memory on the machine.
-    uint64_t free_mem = uv_get_available_memory();
-    uint64_t high_water_mark = free_mem / 10 * 7;  // 70% high water mark
-
-    if (high_water_mark < max_total_memory)
-       max_total_memory = high_water_mark;
     t_start = jl_hrtime();
 }
 
