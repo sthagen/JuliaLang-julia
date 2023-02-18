@@ -48,7 +48,7 @@ arguments of type `Any`.
 
 To restrict deprecation to a specific signature, annotate the
 arguments of `old`. For example,
-```jldoctest; filter = r"@ .*"
+```jldoctest; filter = r"@ .*"a
 julia> new(x::Int) = x;
 
 julia> new(x::Float64) = 2x;
@@ -378,14 +378,8 @@ helping for type inference.
     In Julia 1.8 and higher, it is favorable to use [`@assume_effects`](@ref) instead of `@pure`.
     This is because `@assume_effects` allows a finer grained control over Julia's purity
     modeling and the effect system enables a wider range of optimizations.
-
-!!! note
-    In Julia 1.10 this is deprecated in favor of [`@assume_effects`](@ref).
-    Specifically, `@assume_effects :foldable` provides similar guarentees.
 """
 macro pure(ex)
-    f, l = __source__.file, __source__.line
-    @warn "`Base.@pure ex` at $f:$l is deprecated, use `Base.@assume_effects :foldable ex` instead."
     return esc(:(Base.@assume_effects :foldable $ex))
 end
 
