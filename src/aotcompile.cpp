@@ -282,7 +282,9 @@ void *jl_create_native_impl(jl_array_t *methods, LLVMOrcThreadSafeModuleRef llvm
     jl_code_info_t *src = NULL;
     JL_GC_PUSH1(&src);
     auto ct = jl_current_task;
-    ct->reentrant_timing++;
+    bool timed = (ct->reentrant_timing & 1) == 0;
+    if (timed)
+        ct->reentrant_timing |= 1;
     orc::ThreadSafeContext ctx;
     orc::ThreadSafeModule backing;
     if (!llvmmod) {
@@ -466,9 +468,12 @@ void *jl_create_native_impl(jl_array_t *methods, LLVMOrcThreadSafeModuleRef llvm
     }
 
     data->M = std::move(clone);
-    if (!ct->reentrant_timing-- && measure_compile_time_enabled) {
-        auto end = jl_hrtime();
-        jl_atomic_fetch_add_relaxed(&jl_cumulative_compile_time, end - compiler_start_time);
+    if (timed) {
+        if (measure_compile_time_enabled) {
+            auto end = jl_hrtime();
+            jl_atomic_fetch_add_relaxed(&jl_cumulative_compile_time, end - compiler_start_time);
+        }
+        ct->reentrant_timing &= ~1ull;
     }
     if (ctx.getContext()) {
         jl_ExecutionEngine->releaseContext(std::move(ctx));
@@ -1259,7 +1264,7 @@ static void add_output(Module &M, TargetMachine &TM, std::vector<std::string> &o
         }
     }
     for (unsigned i = 0; i < threads; ++i) {
-        auto start = &outputs[outputs.size() - outcount * threads * 2 + i];
+        auto start = &outputs[outputs.size() - outcount * threads * 2 + i * outcount];
         auto istr = std::to_string(i);
         if (unopt_out)
             *start++ = (name + "_unopt#" + istr + ".bc").str();
@@ -1274,7 +1279,7 @@ static void add_output(Module &M, TargetMachine &TM, std::vector<std::string> &o
     if (threads == 1) {
         output_timer.startTimer();
         SmallVector<StringRef, 4> names;
-        for (unsigned i = 0; i < outcount; ++i)
+        for (unsigned i = outputs.size() - outcount * 2; i < outputs.size() - outcount; ++i)
             names.push_back(outputs[i]);
         add_output_impl(M, TM, outputs.data() + outputs.size() - outcount, names.data(),
                         unopt_out ? unopt.data() + unopt.size() - 1 : nullptr,
