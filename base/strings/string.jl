@@ -113,7 +113,8 @@ pointer(s::String, i::Integer) = pointer(s) + Int(i)::Int - 1
 ncodeunits(s::String) = Core.sizeof(s)
 codeunit(s::String) = UInt8
 
-@assume_effects :foldable @inline function codeunit(s::String, i::Integer)
+codeunit(s::String, i::Integer) = codeunit(s, Int(i))
+@assume_effects :foldable @inline function codeunit(s::String, i::Int)
     @boundscheck checkbounds(s, i)
     b = GC.@preserve s unsafe_load(pointer(s, i))
     return b
@@ -331,9 +332,8 @@ isvalid(s::String, i::Int) = checkbounds(Bool, s, i) && thisind(s, i) == i
 isascii(s::String) = isascii(codeunits(s))
 
 # don't assume effects for general integers since we cannot know their implementation
-@assume_effects :foldable function repeat(c::Char, r::BitInteger)
-    @invoke repeat(c, r::Integer)
-end
+@assume_effects :foldable repeat(c::Char, r::BitInteger) = @invoke repeat(c::Char, r::Integer)
+
 """
     repeat(c::AbstractChar, r::Integer) -> String
 
@@ -347,7 +347,7 @@ julia> repeat('A', 3)
 ```
 """
 function repeat(c::AbstractChar, r::Integer)
-    c = Char(c)
+    c = Char(c)::Char
     r == 0 && return ""
     r < 0 && throw(ArgumentError("can't repeat a character $r times"))
     u = bswap(reinterpret(UInt32, c))
