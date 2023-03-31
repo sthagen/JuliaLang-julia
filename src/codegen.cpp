@@ -964,15 +964,6 @@ static const auto jl_write_barrier_func = new JuliaFunction{
             AttributeSet(),
             {Attributes(C, {Attribute::ReadOnly})}); },
 };
-static const auto jl_write_barrier_binding_func = new JuliaFunction{
-    "julia.write_barrier_binding",
-    [](LLVMContext &C) { return FunctionType::get(getVoidTy(C),
-            {JuliaType::get_prjlvalue_ty(C)}, true); },
-    [](LLVMContext &C) { return AttributeList::get(C,
-            Attributes(C, {Attribute::NoUnwind, Attribute::NoRecurse, Attribute::InaccessibleMemOnly}),
-            AttributeSet(),
-            {Attributes(C, {Attribute::ReadOnly})}); },
-};
 static const auto jlisa_func = new JuliaFunction{
     XSTR(jl_isa),
     [](LLVMContext &C) {
@@ -1201,11 +1192,7 @@ static const auto julia_call = new JuliaFunction{
     [](LLVMContext &C) {
         auto T_prjlvalue = JuliaType::get_prjlvalue_ty(C);
         return FunctionType::get(T_prjlvalue,
-#ifdef JL_LLVM_OPAQUE_POINTERS
-            {PointerType::get(C, 0),
-#else
             {get_func_sig(C)->getPointerTo(),
-#endif
              T_prjlvalue}, // %f
             true); }, // %args
     get_attrs_basic,
@@ -1218,11 +1205,7 @@ static const auto julia_call2 = new JuliaFunction{
     [](LLVMContext &C) {
         auto T_prjlvalue = JuliaType::get_prjlvalue_ty(C);
         return FunctionType::get(T_prjlvalue,
-#ifdef JL_LLVM_OPAQUE_POINTERS
-            {PointerType::get(C, 0),
-#else
             {get_func2_sig(C)->getPointerTo(),
-#endif
              T_prjlvalue, // %arg1
              T_prjlvalue}, // %f
             true); }, // %args
@@ -7157,47 +7140,26 @@ static jl_llvm_functions_t
     ctx.f = f;
 
     // Step 4b. determine debug info signature and other type info for locals
-    DIBuilder dbuilder(*M);
+    DICompileUnit::DebugEmissionKind emissionKind = (DICompileUnit::DebugEmissionKind) ctx.params->debug_info_kind;
+    DICompileUnit::DebugNameTableKind tableKind;
+    if (JL_FEAT_TEST(ctx, gnu_pubnames))
+        tableKind = DICompileUnit::DebugNameTableKind::GNU;
+    else
+        tableKind = DICompileUnit::DebugNameTableKind::None;
+    DIBuilder dbuilder(*M, true, ctx.debug_enabled ? getOrCreateJuliaCU(*M, emissionKind, tableKind) : NULL);
     DIFile *topfile = NULL;
     DISubprogram *SP = NULL;
     DebugLoc noDbg, topdebugloc;
     if (ctx.debug_enabled) {
-        DICompileUnit::DebugEmissionKind emissionKind = (DICompileUnit::DebugEmissionKind) ctx.params->debug_info_kind;
-        DICompileUnit::DebugNameTableKind tableKind;
-
-        if (JL_FEAT_TEST(ctx, gnu_pubnames)) {
-            tableKind = DICompileUnit::DebugNameTableKind::GNU;
-        }
-        else {
-            tableKind = DICompileUnit::DebugNameTableKind::None;
-        }
         topfile = dbuilder.createFile(ctx.file, ".");
-        DICompileUnit *CU =
-            dbuilder.createCompileUnit(llvm::dwarf::DW_LANG_Julia
-                                       ,topfile      // File
-                                       ,"julia"      // Producer
-                                       ,true         // isOptimized
-                                       ,""           // Flags
-                                       ,0            // RuntimeVersion
-                                       ,""           // SplitName
-                                       ,emissionKind // Kind
-                                       ,0            // DWOId
-                                       ,true         // SplitDebugInlining
-                                       ,false        // DebugInfoForProfiling
-                                       ,tableKind    // NameTableKind
-                                       );
-
         DISubroutineType *subrty;
-        if (jl_options.debug_level <= 1) {
+        if (jl_options.debug_level <= 1)
             subrty = debuginfo.jl_di_func_null_sig;
-        }
-        else if (!specsig) {
+        else if (!specsig)
             subrty = debuginfo.jl_di_func_sig;
-        }
-        else {
+        else
             subrty = get_specsig_di(ctx, debuginfo, jlrettype, lam->specTypes, dbuilder);
-        }
-        SP = dbuilder.createFunction(CU
+        SP = dbuilder.createFunction(nullptr
                                      ,dbgFuncName      // Name
                                      ,f->getName()     // LinkageName
                                      ,topfile          // File
@@ -8757,7 +8719,6 @@ static void init_jit_functions(void)
     add_named_global(jl_loopinfo_marker_func, (void*)NULL);
     add_named_global(jl_typeof_func, (void*)NULL);
     add_named_global(jl_write_barrier_func, (void*)NULL);
-    add_named_global(jl_write_barrier_binding_func, (void*)NULL);
     add_named_global(jldlsym_func, &jl_load_and_lookup);
     add_named_global("jl_adopt_thread", &jl_adopt_thread);
     add_named_global(jlgetcfunctiontrampoline_func, &jl_get_cfunction_trampoline);
