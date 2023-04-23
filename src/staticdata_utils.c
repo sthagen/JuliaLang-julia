@@ -85,7 +85,7 @@ static uint64_t jl_worklist_key(jl_array_t *worklist) JL_NOTSAFEPOINT
 
 static jl_array_t *newly_inferred JL_GLOBALLY_ROOTED /*FIXME*/;
 // Mutex for newly_inferred
-static jl_mutex_t newly_inferred_mutex;
+jl_mutex_t newly_inferred_mutex;
 
 // Register array of newly-inferred MethodInstances
 // This gets called as the first step of Base.include_package_for_output
@@ -1022,18 +1022,18 @@ static int jl_verify_graph_edge(size_t *maxvalids2_data, jl_array_t *edges, size
         if (idx != childidx) {
             if (max_valid < maxvalids2_data[childidx])
                 maxvalids2_data[childidx] = max_valid;
-            if (_jl_debug_method_invalidation && max_valid != ~(size_t)0) {
-                jl_method_instance_t *mi = (jl_method_instance_t*)jl_array_ptr_ref(edges, childidx * 2);
-                jl_value_t *loctag = NULL;
-                JL_GC_PUSH1(&loctag);
-                jl_array_ptr_1d_push(_jl_debug_method_invalidation, (jl_value_t*)mi);
-                loctag = jl_cstr_to_string("verify_methods");
-                jl_array_ptr_1d_push(_jl_debug_method_invalidation, loctag);
-                jl_array_ptr_1d_push(_jl_debug_method_invalidation, (jl_value_t*)cause);
-                JL_GC_POP();
-            }
         }
         visited->items[childidx] = (void*)1;
+        if (_jl_debug_method_invalidation && max_valid != ~(size_t)0) {
+            jl_method_instance_t *mi = (jl_method_instance_t*)jl_array_ptr_ref(edges, childidx * 2);
+            jl_value_t *loctag = NULL;
+            JL_GC_PUSH1(&loctag);
+            jl_array_ptr_1d_push(_jl_debug_method_invalidation, (jl_value_t*)mi);
+            loctag = jl_cstr_to_string("verify_methods");
+            jl_array_ptr_1d_push(_jl_debug_method_invalidation, loctag);
+            jl_array_ptr_1d_push(_jl_debug_method_invalidation, (jl_value_t*)cause);
+            JL_GC_POP();
+        }
     }
     return 0;
 }

@@ -2710,11 +2710,15 @@ end
     @test rem2pi(T(-13), RoundUp)      ≈ -13+4π
 end
 
-@testset "PR #36420 $T" for T in (Float16, Float32, Float64)
+@testset "PR #36420 $T" for T in (Float16, Float32, Float64, BigFloat)
+    nan = reinterpret(Float64, reinterpret(UInt64, NaN) | rand(UInt64))
     for r in (RoundToZero, RoundNearest, RoundDown, RoundUp)
-        for x in (Inf, -Inf, NaN, -NaN)
+        for x in (Inf, -Inf, NaN, -NaN, nan)
             @test isnan(rem2pi(T(x), r))
             @test rem2pi(T(x), r) isa T
+            if isnan(x) && T !== BigFloat
+                @test rem2pi(T(x), r) === T(x)
+            end
         end
     end
 end
@@ -2960,6 +2964,20 @@ end
         @test true == ceil(Bool, 0.6)
         @test false == ceil(Bool, -0.7)
     end
+end
+
+Base.@irrational irrational_1548_pi 4863.185427757 1548big(pi)
+Base.@irrational irrational_inv_1548_pi 1/big(irrational_1548_pi)
+@testset "@irrational" begin
+    @test irrational_1548_pi ≈ 1548big(pi)
+    @test Float64(irrational_1548_pi) == 1548π
+    @test irrational_1548_pi ≈ 1548pi
+    @test irrational_1548_pi != 1548pi
+
+    @test irrational_inv_1548_pi ≈ inv(1548big(pi))
+    @test Float64(irrational_inv_1548_pi) == 1/(1548π)
+    @test irrational_inv_1548_pi ≈ inv(1548pi)
+    @test irrational_inv_1548_pi != inv(1548pi)
 end
 
 @testset "modf" begin

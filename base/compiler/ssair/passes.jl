@@ -326,7 +326,7 @@ function already_inserted(compact::IncrementalCompact, old::OldSSAValue)
     end
     id -= length(compact.ir.stmts)
     if id < length(compact.ir.new_nodes)
-        error("")
+        return already_inserted(compact, OldSSAValue(compact.ir.new_nodes.info[id].pos))
     end
     id -= length(compact.ir.new_nodes)
     @assert id <= length(compact.pending_nodes)
@@ -1152,12 +1152,10 @@ function try_resolve_finalizer!(ir::IRCode, idx::Int, finalizer_idx::Int, defuse
     function note_block_use!(usebb::Int, useidx::Int)
         new_bb_insert_block = nearest_common_dominator(get!(lazypostdomtree),
             bb_insert_block, usebb)
-        if new_bb_insert_block == bb_insert_block == usebb
-            if bb_insert_idx !== nothing
-                bb_insert_idx = max(bb_insert_idx::Int, useidx)
-            else
-                bb_insert_idx = useidx
-            end
+        if new_bb_insert_block == bb_insert_block && bb_insert_idx !== nothing
+            bb_insert_idx = max(bb_insert_idx::Int, useidx)
+        elseif new_bb_insert_block == usebb
+            bb_insert_idx = useidx
         else
             bb_insert_idx = nothing
         end

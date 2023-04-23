@@ -485,19 +485,19 @@ static int union_sort_cmp(jl_value_t *a, jl_value_t *b) JL_NOTSAFEPOINT
     }
 }
 
-static int count_union_components(jl_value_t **types, size_t n)
+static int count_union_components(jl_value_t **types, size_t n, int widen)
 {
     size_t i, c = 0;
     for (i = 0; i < n; i++) {
         jl_value_t *e = types[i];
         while (jl_is_uniontype(e)) {
             jl_uniontype_t *u = (jl_uniontype_t*)e;
-            c += count_union_components(&u->a, 1);
+            c += count_union_components(&u->a, 1, widen);
             e = u->b;
         }
-        if (jl_is_unionall(e) && jl_is_uniontype(jl_unwrap_unionall(e))) {
+        if (widen && jl_is_unionall(e) && jl_is_uniontype(jl_unwrap_unionall(e))) {
             jl_uniontype_t *u = (jl_uniontype_t*)jl_unwrap_unionall(e);
-            c += count_union_components(&u->a, 2);
+            c += count_union_components(&u->a, 2, widen);
         }
         else {
             c++;
@@ -506,21 +506,21 @@ static int count_union_components(jl_value_t **types, size_t n)
     return c;
 }
 
-static void flatten_type_union(jl_value_t **types, size_t n, jl_value_t **out, size_t *idx)
+static void flatten_type_union(jl_value_t **types, size_t n, jl_value_t **out, size_t *idx, int widen)
 {
     size_t i;
     for (i = 0; i < n; i++) {
         jl_value_t *e = types[i];
         while (jl_is_uniontype(e)) {
             jl_uniontype_t *u = (jl_uniontype_t*)e;
-            flatten_type_union(&u->a, 1, out, idx);
+            flatten_type_union(&u->a, 1, out, idx, widen);
             e = u->b;
         }
-        if (jl_is_unionall(e) && jl_is_uniontype(jl_unwrap_unionall(e))) {
+        if (widen && jl_is_unionall(e) && jl_is_uniontype(jl_unwrap_unionall(e))) {
             // flatten this UnionAll into place by switching the union and unionall
             jl_uniontype_t *u = (jl_uniontype_t*)jl_unwrap_unionall(e);
             size_t old_idx = 0;
-            flatten_type_union(&u->a, 2, out, idx);
+            flatten_type_union(&u->a, 2, out, idx, widen);
             for (; old_idx < *idx; old_idx++)
                 out[old_idx] = jl_rewrap_unionall(out[old_idx], e);
         }
@@ -560,11 +560,11 @@ JL_DLLEXPORT jl_value_t *jl_type_union(jl_value_t **ts, size_t n)
     if (n == 1)
         return ts[0];
 
-    size_t nt = count_union_components(ts, n);
+    size_t nt = count_union_components(ts, n, 1);
     jl_value_t **temp;
     JL_GC_PUSHARGS(temp, nt+1);
     size_t count = 0;
-    flatten_type_union(ts, n, temp, &count);
+    flatten_type_union(ts, n, temp, &count, 1);
     assert(count == nt);
     size_t j;
     for (i = 0; i < nt; i++) {
@@ -641,14 +641,14 @@ static int simple_subtype2(jl_value_t *a, jl_value_t *b, int hasfree)
 
 jl_value_t *simple_union(jl_value_t *a, jl_value_t *b)
 {
-    size_t nta = count_union_components(&a, 1);
-    size_t ntb = count_union_components(&b, 1);
+    size_t nta = count_union_components(&a, 1, 1);
+    size_t ntb = count_union_components(&b, 1, 1);
     size_t nt = nta + ntb;
     jl_value_t **temp;
     JL_GC_PUSHARGS(temp, nt+1);
     size_t count = 0;
-    flatten_type_union(&a, 1, temp, &count);
-    flatten_type_union(&b, 1, temp, &count);
+    flatten_type_union(&a, 1, temp, &count, 1);
+    flatten_type_union(&b, 1, temp, &count, 1);
     assert(count == nt);
     size_t i, j;
     size_t ra = nta, rb = ntb;
@@ -717,6 +717,113 @@ jl_value_t *simple_union(jl_value_t *a, jl_value_t *b)
     return tu;
 }
 
+int obviously_disjoint(jl_value_t *a, jl_value_t *b, int specificity);
+
+static int simple_disjoint(jl_value_t *a, jl_value_t *b, int hasfree)
+{
+    if (jl_is_uniontype(b)) {
+        jl_value_t *b1 = ((jl_uniontype_t *)b)->a, *b2 = ((jl_uniontype_t *)b)->b;
+        JL_GC_PUSH2(&b1, &b2);
+        int res = simple_disjoint(a, b1, hasfree) && simple_disjoint(a, b2, hasfree);
+        JL_GC_POP();
+        return res;
+    }
+    if (!hasfree && !jl_has_free_typevars(b))
+        return jl_has_empty_intersection(a, b);
+    return obviously_disjoint(a, b, 0);
+}
+
+jl_value_t *simple_intersect(jl_value_t *a, jl_value_t *b, int overesi)
+{
+    // Unlike `Union`, we don't unwrap `UnionAll` here to avoid possible widening.
+    size_t nta = count_union_components(&a, 1, 0);
+    size_t ntb = count_union_components(&b, 1, 0);
+    size_t nt = nta + ntb;
+    jl_value_t **temp;
+    JL_GC_PUSHARGS(temp, nt+1);
+    size_t count = 0;
+    flatten_type_union(&a, 1, temp, &count, 0);
+    flatten_type_union(&b, 1, temp, &count, 0);
+    assert(count == nt);
+    size_t i, j;
+    // first remove disjoint elements.
+    for (i = 0; i < nt; i++) {
+        if (simple_disjoint(temp[i], (i < nta ? b : a), jl_has_free_typevars(temp[i])))
+            temp[i] = NULL;
+    }
+    // then check subtyping.
+    // stemp[k] == -1 : ∃i temp[k] >:ₛ temp[i]
+    // stemp[k] == 1 : ∃i temp[k] == temp[i]
+    // stemp[k] == 2 : ∃i temp[k] <:ₛ temp[i]
+    int8_t *stemp = (int8_t *)alloca(count);
+    memset(stemp, 0, count);
+    for (i = 0; i < nta; i++) {
+        if (temp[i] == NULL) continue;
+        int hasfree = jl_has_free_typevars(temp[i]);
+        for (j = nta; j < nt; j++) {
+            if (temp[j] == NULL) continue;
+            int subs = simple_subtype2(temp[i], temp[j], hasfree || jl_has_free_typevars(temp[j]));
+            int subab = subs & 1, subba = subs >> 1;
+            if (subba && !subab) {
+                stemp[i] = -1;
+                if (stemp[j] >= 0) stemp[j] = 2;
+            }
+            else if (subab && !subba) {
+                stemp[j] = -1;
+                if (stemp[i] >= 0) stemp[i] = 2;
+            }
+            else if (subs) {
+                if (stemp[i] == 0) stemp[i] = 1;
+                if (stemp[j] == 0) stemp[j] = 1;
+            }
+        }
+    }
+    int subs[2] = {1, 1}, rs[2] = {1, 1};
+    for (i = 0; i < nt; i++) {
+        subs[i >= nta] &= (temp[i] == NULL || stemp[i] > 0);
+        rs[i >= nta] &= (temp[i] != NULL && stemp[i] > 0);
+    }
+    // return a(b) if a(b) <: b(a)
+    if (rs[0]) {
+        JL_GC_POP();
+        return a;
+    }
+    if (rs[1]) {
+        JL_GC_POP();
+        return b;
+    }
+    // return `Union{}` for `merge_env` if we can't prove `<:` or `>:`
+    if (!overesi && !subs[0] && !subs[1]) {
+        JL_GC_POP();
+        return jl_bottom_type;
+    }
+    nt = subs[0] ? nta : subs[1] ? nt  : nt;
+    i  = subs[0] ? 0   : subs[1] ? nta : 0;
+    count = nt - i;
+    if (!subs[0] && !subs[1]) {
+        // prepare for over estimation
+        // only preserve `a` with strict <:, but preserve `b` without strict >:
+        for (j = 0; j < nt; j++) {
+            if (stemp[j] < (j < nta ? 2 : 0))
+                temp[j] = NULL;
+        }
+    }
+    isort_union(&temp[i], count);
+    temp[nt] = jl_bottom_type;
+    size_t k;
+    for (k = nt; k-- > i; ) {
+        if (temp[k] != NULL) {
+            if (temp[nt] == jl_bottom_type)
+                temp[nt] = temp[k];
+            else
+                temp[nt] = jl_new_struct(jl_uniontype_type, temp[k], temp[nt]);
+        }
+    }
+    assert(temp[nt] != NULL);
+    jl_value_t *tu = temp[nt];
+    JL_GC_POP();
+    return tu;
+}
 
 // unionall types -------------------------------------------------------------
 
@@ -927,7 +1034,7 @@ static ssize_t lookup_type_idx_linearvalue(jl_svec_t *cache, jl_value_t *key1, j
 
 static jl_value_t *lookup_type(jl_typename_t *tn JL_PROPAGATES_ROOT, jl_value_t **key, size_t n)
 {
-    JL_TIMING(TYPE_CACHE_LOOKUP);
+    JL_TIMING(TYPE_CACHE_LOOKUP, TYPE_CACHE_LOOKUP);
     if (tn == jl_type_typename) {
         assert(n == 1);
         jl_value_t *uw = jl_unwrap_unionall(key[0]);
@@ -948,7 +1055,7 @@ static jl_value_t *lookup_type(jl_typename_t *tn JL_PROPAGATES_ROOT, jl_value_t 
 
 static jl_value_t *lookup_typevalue(jl_typename_t *tn, jl_value_t *key1, jl_value_t **key, size_t n, int leaf)
 {
-    JL_TIMING(TYPE_CACHE_LOOKUP);
+    JL_TIMING(TYPE_CACHE_LOOKUP, TYPE_CACHE_LOOKUP);
     unsigned hv = typekeyvalue_hash(tn, key1, key, n, leaf);
     if (hv) {
         jl_svec_t *cache = jl_atomic_load_relaxed(&tn->cache);
@@ -1069,7 +1176,7 @@ static int is_cacheable(jl_datatype_t *type)
 
 void jl_cache_type_(jl_datatype_t *type)
 {
-    JL_TIMING(TYPE_CACHE_INSERT);
+    JL_TIMING(TYPE_CACHE_INSERT, TYPE_CACHE_INSERT);
     assert(is_cacheable(type));
     jl_value_t **key = jl_svec_data(type->parameters);
     int n = jl_svec_len(type->parameters);
@@ -2805,7 +2912,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_method_type =
         jl_new_datatype(jl_symbol("Method"), core,
                         jl_any_type, jl_emptysvec,
-                        jl_perm_symsvec(28,
+                        jl_perm_symsvec(29,
                             "name",
                             "module",
                             "file",
@@ -2833,8 +2940,9 @@ void jl_init_types(void) JL_GC_DISABLED
                             "isva",
                             "is_for_opaque_closure",
                             "constprop",
+                            "max_varargs",
                             "purity"),
-                        jl_svec(28,
+                        jl_svec(29,
                             jl_symbol_type,
                             jl_module_type,
                             jl_symbol_type,
@@ -2861,6 +2969,7 @@ void jl_init_types(void) JL_GC_DISABLED
                             jl_int32_type,
                             jl_bool_type,
                             jl_bool_type,
+                            jl_uint8_type,
                             jl_uint8_type,
                             jl_uint8_type),
                         jl_emptysvec,
