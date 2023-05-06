@@ -8,6 +8,11 @@
 static inline const char *gnu_basename(const char *path)
 {
     const char *base = strrchr(path, '/');
+#ifdef _WIN32
+    const char *backslash = strrchr(path, '\\');
+    if (backslash > base)
+        base = backslash;
+#endif
     return base ? base+1 : path;
 }
 
@@ -59,13 +64,16 @@ extern uint32_t jl_timing_print_limit;
 
 #define JL_TIMING(subsystem, event)
 #define JL_TIMING_SUSPEND(subsystem, ct)
+
 #define jl_timing_show(v, b)
 #define jl_timing_show_module(m, b)
 #define jl_timing_show_filename(f, b)
 #define jl_timing_show_method_instance(mi, b)
 #define jl_timing_show_method(mi, b)
 #define jl_timing_show_func_sig(tt, b)
-#define jl_timing_printf(s, f, ...)
+#define jl_timing_printf(b, f, ...)
+#define jl_timing_puts(b, s)
+#define jl_timing_init_task(t)
 #define jl_timing_block_enter_task(ct, ptls, blk)
 #define jl_timing_block_exit_task(ct, ptls) ((jl_timing_block_t *)NULL)
 #define jl_pop_timing_block(blk)
@@ -92,6 +100,8 @@ extern "C" {
 #endif
 void jl_print_timings(void);
 jl_timing_block_t *jl_pop_timing_block(jl_timing_block_t *cur_block);
+
+void jl_timing_init_task(jl_task_t *t);
 void jl_timing_block_enter_task(jl_task_t *ct, jl_ptls_t ptls, jl_timing_block_t *prev_blk);
 jl_timing_block_t *jl_timing_block_exit_task(jl_task_t *ct, jl_ptls_t ptls);
 
@@ -106,6 +116,7 @@ void jl_timing_show_method_instance(jl_method_instance_t *mi, jl_timing_block_t 
 void jl_timing_show_method(jl_method_t *method, jl_timing_block_t *cur_block);
 void jl_timing_show_func_sig(jl_value_t *v, jl_timing_block_t *cur_block);
 void jl_timing_printf(jl_timing_block_t *cur_block, const char *format, ...);
+void jl_timing_puts(jl_timing_block_t *cur_block, const char *str);
 #ifdef __cplusplus
 }
 #endif

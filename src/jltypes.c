@@ -1575,6 +1575,14 @@ static unsigned type_hash(jl_value_t *kj, int *failed) JL_NOTSAFEPOINT
     }
 }
 
+JL_DLLEXPORT uintptr_t jl_type_hash(jl_value_t *v) JL_NOTSAFEPOINT
+{
+    // NOTE: The value of `failed` is purposefully ignored here. The parameter is relevant
+    // for other parts of the internal algorithm but not for exposing to the Julia side.
+    int failed = 0;
+    return type_hash(v, &failed);
+}
+
 static unsigned typekey_hash(jl_typename_t *tn, jl_value_t **key, size_t n, int nofail) JL_NOTSAFEPOINT
 {
     if (tn == jl_type_typename && key[0] == jl_bottom_type)
@@ -3182,6 +3190,8 @@ void jl_init_types(void) JL_GC_DISABLED
 
     tv = jl_svec2(tvar("A"), tvar("R"));
     jl_opaque_closure_type = (jl_unionall_t*)jl_new_datatype(jl_symbol("OpaqueClosure"), core, jl_function_type, tv,
+        // N.B.: OpaqueClosure call code relies on specptr being field 5.
+        // Update that code if you change this.
         jl_perm_symsvec(5, "captures", "world", "source", "invoke", "specptr"),
         jl_svec(5, jl_any_type, jl_long_type, jl_any_type, pointer_void, pointer_void),
         jl_emptysvec, 0, 0, 5)->name->wrapper;

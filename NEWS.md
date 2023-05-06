@@ -4,6 +4,9 @@ Julia v1.10 Release Notes
 New language features
 ---------------------
 
+* `⥺` (U+297A, `\leftarrowsubset`) and `⥷` (U+2977, `\leftarrowless`)
+  may now be used as binary operators with arrow precedence. ([#45962])
+
 Language changes
 ----------------
 
@@ -14,6 +17,7 @@ Language changes
   result previously. This also lets the runtime optimize certain method lookups in a way
   that significantly improves load and inference times for heavily overloaded methods that
   dispatch on Types (such as traits and constructors).
+* The "h bar" `ℏ` (`\hslash` U+210F) character is now treated as equivalent to `ħ` (`\hbar` U+0127).
 
 Compiler/Runtime improvements
 -----------------------------
@@ -106,6 +110,7 @@ Standard library changes
 
 * The `@test_broken` macro (or `@test` with `broken=true`) now complains if the test expression returns a
   non-boolean value in the same way as a non-broken test. ([#47804])
+* When a call to `@test` fails or errors inside a function, a larger stacktrace is now printed such that the location of the test within a `@testset` can be retrieved ([#49451])
 
 #### Dates
 
@@ -122,6 +127,7 @@ Standard library changes
 #### InteractiveUtils
 
  * `code_native` and `@code_native` now default to intel syntax instead of AT&T.
+ * `@time_imports` now shows the timing of any module `__init__()`s that are run ([#49529])
 
 Deprecated or removed
 ---------------------

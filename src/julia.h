@@ -235,6 +235,8 @@ typedef jl_value_t *(*jl_fptr_sparam_t)(jl_value_t*, jl_value_t**, uint32_t, jl_
 extern jl_call_t jl_fptr_interpret_call;
 JL_DLLEXPORT extern jl_callptr_t jl_fptr_interpret_call_addr;
 
+JL_DLLEXPORT extern jl_callptr_t jl_f_opaque_closure_call_addr;
+
 typedef struct _jl_line_info_node_t {
     struct _jl_module_t *module;
     jl_value_t *method; // may contain a jl_symbol, jl_method_t, or jl_method_instance_t
@@ -1401,6 +1403,7 @@ JL_DLLEXPORT int jl_egal__bits(const jl_value_t *a JL_MAYBE_UNROOTED, const jl_v
 JL_DLLEXPORT int jl_egal__special(const jl_value_t *a JL_MAYBE_UNROOTED, const jl_value_t *b JL_MAYBE_UNROOTED, jl_datatype_t *dt) JL_NOTSAFEPOINT;
 JL_DLLEXPORT int jl_egal__unboxed(const jl_value_t *a JL_MAYBE_UNROOTED, const jl_value_t *b JL_MAYBE_UNROOTED, jl_datatype_t *dt) JL_NOTSAFEPOINT;
 JL_DLLEXPORT uintptr_t jl_object_id(jl_value_t *v) JL_NOTSAFEPOINT;
+JL_DLLEXPORT uintptr_t jl_type_hash(jl_value_t *v) JL_NOTSAFEPOINT;
 
 STATIC_INLINE int jl_egal__unboxed_(const jl_value_t *a JL_MAYBE_UNROOTED, const jl_value_t *b JL_MAYBE_UNROOTED, jl_datatype_t *dt) JL_NOTSAFEPOINT
 {
@@ -1991,6 +1994,9 @@ JL_DLLEXPORT void JL_NORETURN jl_rethrow_other(jl_value_t *e JL_MAYBE_UNROOTED);
 JL_DLLEXPORT void JL_NORETURN jl_no_exc_handler(jl_value_t *e, jl_task_t *ct);
 JL_DLLEXPORT JL_CONST_FUNC jl_gcframe_t **(jl_get_pgcstack)(void) JL_GLOBALLY_ROOTED JL_NOTSAFEPOINT;
 #define jl_current_task (container_of(jl_get_pgcstack(), jl_task_t, gcstack))
+
+extern JL_DLLIMPORT int jl_task_gcstack_offset;
+extern JL_DLLIMPORT int jl_task_ptls_offset;
 
 #include "julia_locks.h"   // requires jl_task_t definition
 
