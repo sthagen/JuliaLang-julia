@@ -11,12 +11,21 @@
 extern "C" {
 #endif
 
+// Number of GC threads that may run parallel marking
+int jl_n_markthreads;
+// Number of GC threads that may run concurrent sweeping (0 or 1)
+int jl_n_sweepthreads;
 // Number of threads currently running the GC mark-loop
 _Atomic(int) gc_n_threads_marking;
 // `tid` of mutator thread that triggered GC
 _Atomic(int) gc_master_tid;
 // `tid` of first GC thread
 int gc_first_tid;
+// Mutex/cond used to synchronize wakeup of GC threads on parallel marking
+uv_mutex_t gc_threads_lock;
+uv_cond_t gc_threads_cond;
+// To indicate whether concurrent sweeping should run
+uv_sem_t gc_sweep_assists_needed;
 
 // Linked list of callback functions
 
@@ -1214,6 +1223,8 @@ STATIC_INLINE jl_taggedvalue_t *gc_reset_page(jl_ptls_t ptls2, const jl_gc_pool_
     jl_taggedvalue_t *beg = (jl_taggedvalue_t*)(pg->data + GC_PAGE_OFFSET);
     pg->has_young = 0;
     pg->has_marked = 0;
+    pg->prev_nold = 0;
+    pg->nold = 0;
     pg->fl_begin_offset = UINT16_MAX;
     pg->fl_end_offset = UINT16_MAX;
     return beg;
@@ -1230,7 +1241,10 @@ static NOINLINE jl_taggedvalue_t *gc_add_page(jl_gc_pool_t *p) JL_NOTSAFEPOINT
     // Do not pass in `ptls` as argument. This slows down the fast path
     // in pool_alloc significantly
     jl_ptls_t ptls = jl_current_task->ptls;
-    jl_gc_pagemeta_t *pg = jl_gc_alloc_page();
+    jl_gc_pagemeta_t *pg = pop_page_metadata_back(&ptls->page_metadata_lazily_freed);
+    if (pg == NULL) {
+        pg = jl_gc_alloc_page();
+    }
     pg->osize = p->osize;
     pg->thread_n = ptls->tid;
     set_page_metadata(pg);
@@ -1287,20 +1301,8 @@ STATIC_INLINE jl_value_t *jl_gc_pool_alloc_inner(jl_ptls_t ptls, int pool_offset
             assert(pg->osize == p->osize);
             pg->nfree = 0;
             pg->has_young = 1;
-            pg = pop_page_metadata_back(&ptls->page_metadata_lazily_freed);
-            if (pg != NULL) {
-                v = gc_reset_page(ptls, p, pg);
-                pg->osize = p->osize;
-                push_page_metadata_back(&ptls->page_metadata_allocd, pg);
-            }
-            else {
-                v = NULL;
-            }
         }
-        // Not an else!!
-        if (v == NULL) {
-            v = gc_add_page(p);
-        }
+        v = gc_add_page(p);
         next = (jl_taggedvalue_t*)((char*)v + osize);
     }
     p->newpages = next;
@@ -1345,16 +1347,20 @@ static jl_taggedvalue_t **gc_sweep_page(jl_gc_pool_t *p, jl_gc_pagemeta_t **allo
     char *data = pg->data;
     jl_taggedvalue_t *v = (jl_taggedvalue_t*)(data + GC_PAGE_OFFSET);
     char *lim = data + GC_PAGE_SZ - osize;
+    char *lim_newpages = data + GC_PAGE_SZ;
+    if (gc_page_data((char*)p->newpages - 1) == data) {
+        lim_newpages = (char*)p->newpages;
+    }
     size_t old_nfree = pg->nfree;
     size_t nfree;
 
-    int reuse_page = 1;
+    int re_use_page = 1;
     int freed_lazily = 0;
     int freedall = 1;
     int pg_skpd = 1;
     if (!pg->has_marked) {
-        reuse_page = 0;
-    #ifdef _P64
+        re_use_page = 0;
+    #ifdef _P64 // TODO: re-enable on `_P32`?
         // lazy version: (empty) if the whole page was already unused, free it (return it to the pool)
         // eager version: (freedall) free page as soon as possible
         // the eager one uses less memory.
@@ -1394,7 +1400,8 @@ static jl_taggedvalue_t **gc_sweep_page(jl_gc_pool_t *p, jl_gc_pagemeta_t **allo
         jl_taggedvalue_t **pfl_begin = NULL;
         while ((char*)v <= lim) {
             int bits = v->bits.gc;
-            if (!gc_marked(bits)) {
+            // if an object is past `lim_newpages` then we can guarantee it's garbage
+            if (!gc_marked(bits) || (char*)v >= lim_newpages) {
                 *pfl = v;
                 pfl = &v->next;
                 pfl_begin = (pfl_begin != NULL) ? pfl_begin : pfl;
@@ -1431,15 +1438,25 @@ static jl_taggedvalue_t **gc_sweep_page(jl_gc_pool_t *p, jl_gc_pagemeta_t **allo
     nfree = pg->nfree;
 
 done:
-    if (reuse_page) {
+    if (re_use_page) {
         push_page_metadata_back(allocd, pg);
     }
     else if (freed_lazily) {
         push_page_metadata_back(lazily_freed, pg);
     }
     else {
+    #ifdef _P64 // only enable concurrent sweeping on 64bit
+        if (jl_n_sweepthreads == 0) {
+            jl_gc_free_page(pg);
+            push_lf_page_metadata_back(&global_page_pool_freed, pg);
+        }
+        else {
+            push_lf_page_metadata_back(&global_page_pool_lazily_freed, pg);
+        }
+    #else
         jl_gc_free_page(pg);
         push_lf_page_metadata_back(&global_page_pool_freed, pg);
+    #endif
     }
     gc_time_count_page(freedall, pg_skpd);
     gc_num.freed += (nfree - old_nfree) * osize;
@@ -1558,6 +1575,13 @@ static void gc_sweep_pool(int sweep_full)
             }
         }
     }
+
+#ifdef _P64 // only enable concurrent sweeping on 64bit
+    // wake thread up to sweep concurrently
+    if (jl_n_sweepthreads > 0) {
+        uv_sem_post(&gc_sweep_assists_needed);
+    }
+#endif
 
     gc_time_pool_end(sweep_full);
 }
@@ -2689,8 +2713,8 @@ void gc_mark_and_steal(jl_ptls_t ptls)
     // of work for the mark loop
     steal : {
         // Try to steal chunk from random GC thread
-        for (int i = 0; i < 4 * jl_n_gcthreads; i++) {
-            uint32_t v = gc_first_tid + cong(UINT64_MAX, UINT64_MAX, &ptls->rngseed) % jl_n_gcthreads;
+        for (int i = 0; i < 4 * jl_n_markthreads; i++) {
+            uint32_t v = gc_first_tid + cong(UINT64_MAX, UINT64_MAX, &ptls->rngseed) % jl_n_markthreads;
             jl_gc_markqueue_t *mq2 = &gc_all_tls_states[v]->mark_queue;
             c = gc_chunkqueue_steal_from(mq2);
             if (c.cid != GC_empty_chunk) {
@@ -2699,7 +2723,7 @@ void gc_mark_and_steal(jl_ptls_t ptls)
             }
         }
         // Sequentially walk GC threads to try to steal chunk
-        for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
+        for (int i = gc_first_tid; i < gc_first_tid + jl_n_markthreads; i++) {
             jl_gc_markqueue_t *mq2 = &gc_all_tls_states[i]->mark_queue;
             c = gc_chunkqueue_steal_from(mq2);
             if (c.cid != GC_empty_chunk) {
@@ -2716,15 +2740,15 @@ void gc_mark_and_steal(jl_ptls_t ptls)
             }
         }
         // Try to steal pointer from random GC thread
-        for (int i = 0; i < 4 * jl_n_gcthreads; i++) {
-            uint32_t v = gc_first_tid + cong(UINT64_MAX, UINT64_MAX, &ptls->rngseed) % jl_n_gcthreads;
+        for (int i = 0; i < 4 * jl_n_markthreads; i++) {
+            uint32_t v = gc_first_tid + cong(UINT64_MAX, UINT64_MAX, &ptls->rngseed) % jl_n_markthreads;
             jl_gc_markqueue_t *mq2 = &gc_all_tls_states[v]->mark_queue;
             new_obj = gc_ptr_queue_steal_from(mq2);
             if (new_obj != NULL)
                 goto mark;
         }
         // Sequentially walk GC threads to try to steal pointer
-        for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
+        for (int i = gc_first_tid; i < gc_first_tid + jl_n_markthreads; i++) {
             jl_gc_markqueue_t *mq2 = &gc_all_tls_states[i]->mark_queue;
             new_obj = gc_ptr_queue_steal_from(mq2);
             if (new_obj != NULL)
@@ -2745,13 +2769,10 @@ void gc_mark_loop_parallel(jl_ptls_t ptls, int master)
     if (master) {
         jl_atomic_store(&gc_master_tid, ptls->tid);
         // Wake threads up and try to do some work
+        uv_mutex_lock(&gc_threads_lock);
         jl_atomic_fetch_add(&gc_n_threads_marking, 1);
-        for (int i = gc_first_tid; i < gc_first_tid + jl_n_gcthreads; i++) {
-            jl_ptls_t ptls2 = gc_all_tls_states[i];
-            uv_mutex_lock(&ptls2->sleep_lock);
-            uv_cond_signal(&ptls2->wake_signal);
-            uv_mutex_unlock(&ptls2->sleep_lock);
-        }
+        uv_cond_broadcast(&gc_threads_cond);
+        uv_mutex_unlock(&gc_threads_lock);
         gc_mark_and_steal(ptls);
         jl_atomic_fetch_add(&gc_n_threads_marking, -1);
     }
@@ -2769,7 +2790,7 @@ void gc_mark_loop_parallel(jl_ptls_t ptls, int master)
 
 void gc_mark_loop(jl_ptls_t ptls)
 {
-    if (jl_n_gcthreads == 0 || gc_heap_snapshot_enabled) {
+    if (jl_n_markthreads == 0 || gc_heap_snapshot_enabled) {
         gc_mark_loop_serial(ptls);
     }
     else {
@@ -3063,13 +3084,13 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection)
         }
 
         assert(gc_n_threads);
-        int single_threaded = (jl_n_gcthreads == 0 || gc_heap_snapshot_enabled);
+        int single_threaded_mark = (jl_n_markthreads == 0 || gc_heap_snapshot_enabled);
         for (int t_i = 0; t_i < gc_n_threads; t_i++) {
             jl_ptls_t ptls2 = gc_all_tls_states[t_i];
             jl_ptls_t ptls_dest = ptls;
             jl_gc_markqueue_t *mq_dest = mq;
-            if (!single_threaded) {
-                ptls_dest = gc_all_tls_states[gc_first_tid + t_i % jl_n_gcthreads];
+            if (!single_threaded_mark) {
+                ptls_dest = gc_all_tls_states[gc_first_tid + t_i % jl_n_markthreads];
                 mq_dest = &ptls_dest->mark_queue;
             }
             if (ptls2 != NULL) {
@@ -3511,6 +3532,9 @@ void jl_gc_init(void)
     JL_MUTEX_INIT(&finalizers_lock, "finalizers_lock");
     uv_mutex_init(&gc_cache_lock);
     uv_mutex_init(&gc_perm_lock);
+    uv_mutex_init(&gc_threads_lock);
+    uv_cond_init(&gc_threads_cond);
+    uv_sem_init(&gc_sweep_assists_needed, 0);
 
     jl_gc_init_page();
     jl_gc_debug_init();
