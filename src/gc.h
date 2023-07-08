@@ -82,6 +82,7 @@ typedef struct {
     uint64_t    total_sweep_time;
     uint64_t    total_mark_time;
     uint64_t    last_full_sweep;
+    uint64_t    last_incremental_sweep;
 } jl_gc_num_t;
 
 // Array chunks (work items representing suffixes of
@@ -257,6 +258,11 @@ typedef struct {
     pagetable1_t *meta1[REGION2_PG_COUNT];
 } pagetable_t;
 
+#define GC_PAGE_UNMAPPED        0
+#define GC_PAGE_ALLOCATED       1
+#define GC_PAGE_LAZILY_FREED    2
+#define GC_PAGE_FREED           3
+
 extern pagetable_t alloc_map;
 
 STATIC_INLINE uint8_t gc_alloc_map_is_set(char *_data) JL_NOTSAFEPOINT
@@ -272,7 +278,7 @@ STATIC_INLINE uint8_t gc_alloc_map_is_set(char *_data) JL_NOTSAFEPOINT
     if (r0 == NULL)
         return 0;
     i = REGION0_INDEX(data);
-    return r0->meta[i];
+    return (r0->meta[i] == GC_PAGE_ALLOCATED);
 }
 
 STATIC_INLINE void gc_alloc_map_set(char *_data, uint8_t v) JL_NOTSAFEPOINT
