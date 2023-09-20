@@ -71,6 +71,12 @@ function is_load_forwardable(x::EscapeInfo)
     return isa(AliasInfo, IndexableFields) || isa(AliasInfo, IndexableElements)
 end
 
+@testset "EAUtils" begin
+    @test_throws "everything has been constant folded" code_escapes() do; sin(42); end
+    @test code_escapes(sin, (Int,)) isa EAUtils.EscapeResult
+    @test code_escapes(sin, (Int,)) isa EAUtils.EscapeResult
+end
+
 @testset "basics" begin
     let # arg return
         result = code_escapes((Any,)) do a # return to caller
