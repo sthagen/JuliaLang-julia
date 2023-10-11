@@ -1366,6 +1366,7 @@ extern "C" {
         /* gnu_pubnames */ 1,
 #endif
         /* debug_info_kind */ (int) DICompileUnit::DebugEmissionKind::FullDebug,
+        /* debug_line_info */ 1,
         /* safepoint_on_entry */ 1,
         /* gcstack_arg */ 1,
         /* use_jlplt*/ 1,
@@ -5385,9 +5386,19 @@ static void emit_stmtpos(jl_codectx_t &ctx, jl_value_t *expr, int ssaval_result)
         return;
     }
     else if (head == jl_leave_sym) {
-        assert(jl_is_long(args[0]));
+        int hand_n_leave = 0;
+        for (size_t i = 0; i < jl_expr_nargs(ex); ++i) {
+            jl_value_t *arg = args[i];
+            if (arg == jl_nothing)
+                continue;
+            assert(jl_is_ssavalue(arg));
+            jl_value_t *enter_stmt = jl_array_ptr_ref(ctx.code, ((jl_ssavalue_t*)arg)->id - 1);
+            if (enter_stmt == jl_nothing)
+                continue;
+            hand_n_leave += 1;
+        }
         ctx.builder.CreateCall(prepare_call(jlleave_func),
-                           ConstantInt::get(getInt32Ty(ctx.builder.getContext()), jl_unbox_long(args[0])));
+                           ConstantInt::get(getInt32Ty(ctx.builder.getContext()), hand_n_leave));
     }
     else if (head == jl_pop_exception_sym) {
         jl_cgval_t excstack_state = emit_expr(ctx, jl_exprarg(expr, 0));
@@ -9306,7 +9317,7 @@ extern "C" void jl_init_llvm(void)
 {
     jl_page_size = jl_getpagesize();
     jl_default_debug_info_kind = (int) DICompileUnit::DebugEmissionKind::FullDebug;
-
+    jl_default_cgparams.debug_info_level = (int) jl_options.debug_level;
     InitializeNativeTarget();
     InitializeNativeTargetAsmPrinter();
     InitializeNativeTargetAsmParser();
