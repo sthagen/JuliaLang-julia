@@ -436,7 +436,7 @@ void jl_extern_c_impl(jl_value_t *declrt, jl_tupletype_t *sigt)
         jl_type_error("@ccallable", (jl_value_t*)jl_anytuple_type_type, (jl_value_t*)sigt);
     // check that f is a guaranteed singleton type
     jl_datatype_t *ft = (jl_datatype_t*)jl_tparam0(sigt);
-    if (!jl_is_datatype(ft) || ft->instance == NULL)
+    if (!jl_is_datatype(ft) || !jl_is_datatype_singleton(ft))
         jl_error("@ccallable: function object must be a singleton");
 
     // compute / validate return type
@@ -1947,9 +1947,11 @@ void JuliaOJIT::enableJITDebuggingSupport()
     cantFail(JD.define(orc::absoluteSymbols(GDBFunctions)));
     if (TM->getTargetTriple().isOSBinFormatMachO())
         ObjectLayer.addPlugin(cantFail(orc::GDBJITDebugInfoRegistrationPlugin::Create(ES, JD, TM->getTargetTriple())));
+/*
     else if (TM->getTargetTriple().isOSBinFormatELF())
         //EPCDebugObjectRegistrar doesn't take a JITDylib, so we have to directly provide the call address
         ObjectLayer.addPlugin(std::make_unique<orc::DebugObjectManagerPlugin>(ES, std::make_unique<orc::EPCDebugObjectRegistrar>(ES, orc::ExecutorAddr::fromPtr(&llvm_orc_registerJITLoaderGDBWrapper))));
+*/
 }
 #else
 void JuliaOJIT::enableJITDebuggingSupport()
