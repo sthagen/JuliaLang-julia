@@ -514,21 +514,21 @@ end
     elseif isa(stmt, GotoIfNot)
         op == 1 || throw(BoundsError())
         stmt = GotoIfNot(v, stmt.dest)
+    elseif isa(stmt, ReturnNode)
+        op == 1 || throw(BoundsError())
+        stmt = ReturnNode(v)
     elseif isa(stmt, EnterNode)
         op == 1 || throw(BoundsError())
         stmt = EnterNode(stmt.catch_dest, v)
-    elseif isa(stmt, ReturnNode)
-        op == 1 || throw(BoundsError())
-        stmt = typeof(stmt)(v)
     elseif isa(stmt, Union{AnySSAValue, GlobalRef})
         op == 1 || throw(BoundsError())
         stmt = v
     elseif isa(stmt, UpsilonNode)
         op == 1 || throw(BoundsError())
-        stmt = typeof(stmt)(v)
+        stmt = UpsilonNode(v)
     elseif isa(stmt, PiNode)
         op == 1 || throw(BoundsError())
-        stmt = typeof(stmt)(v, stmt.typ)
+        stmt = PiNode(v, stmt.typ)
     elseif isa(stmt, PhiNode)
         op > length(stmt.values) && throw(BoundsError())
         isassigned(stmt.values, op) || throw(BoundsError())
@@ -1414,6 +1414,7 @@ function process_node!(compact::IncrementalCompact, result_idx::Int, inst::Instr
             result_idx += 1
         end
     elseif cfg_transforms_enabled && isa(stmt, EnterNode)
+        stmt = renumber_ssa2!(stmt, ssa_rename, used_ssas, new_new_used_ssas, late_fixup, result_idx, do_rename_ssa, mark_refined!)::EnterNode
         label = bb_rename_succ[stmt.catch_dest]
         @assert label > 0
         ssa_rename[idx] = SSAValue(result_idx)
