@@ -532,11 +532,9 @@ function copyto!(A::T, B::T) where {T<:Union{LowerTriangular,UnitLowerTriangular
     return A
 end
 
-# Define `mul!` for (Unit){Upper,Lower}Triangular matrices times a number.
-# be permissive here and require compatibility later in _triscale!
-@inline mul!(A::AbstractTriangular, B::AbstractTriangular, C::Number, alpha::Number, beta::Number) =
+@inline _rscale_add!(A::AbstractTriangular, B::AbstractTriangular, C::Number, alpha::Number, beta::Number) =
     _triscale!(A, B, C, MulAddMul(alpha, beta))
-@inline mul!(A::AbstractTriangular, B::Number, C::AbstractTriangular, alpha::Number, beta::Number) =
+@inline _lscale_add!(A::AbstractTriangular, B::Number, C::AbstractTriangular, alpha::Number, beta::Number) =
     _triscale!(A, B, C, MulAddMul(alpha, beta))
 
 function checksize1(A, B)
@@ -803,7 +801,7 @@ rmul!(A::AbstractMatrix, B::AbstractTriangular)   = @inline _trimul!(A, A, B)
 
 
 for TC in (:AbstractVector, :AbstractMatrix)
-    @eval @inline function mul!(C::$TC, A::AbstractTriangular, B::AbstractVector, alpha::Number, beta::Number)
+    @eval @inline function _mul!(C::$TC, A::AbstractTriangular, B::AbstractVector, alpha::Number, beta::Number)
         if isone(alpha) && iszero(beta)
             return _trimul!(C, A, B)
         else
@@ -815,7 +813,7 @@ for (TA, TB) in ((:AbstractTriangular, :AbstractMatrix),
                     (:AbstractMatrix, :AbstractTriangular),
                     (:AbstractTriangular, :AbstractTriangular)
                 )
-    @eval @inline function mul!(C::AbstractMatrix, A::$TA, B::$TB, alpha::Number, beta::Number)
+    @eval @inline function _mul!(C::AbstractMatrix, A::$TA, B::$TB, alpha::Number, beta::Number)
         if isone(alpha) && iszero(beta)
             return _trimul!(C, A, B)
         else
