@@ -171,7 +171,7 @@ function ExplicitEnv(envpath::String=Base.active_project())
     sizehint!(weakdeps_expanded, length(deps))
     sizehint!(extensions_expanded, length(deps))
 
-    if proj_name !== nothing
+    if proj_name !== nothing && proj_uuid !== nothing
         deps_expanded[proj_uuid] = filter!(!=(proj_uuid), collect(values(project_deps)))
         extensions_expanded[proj_uuid] = project_extensions
         path = get(project_d, "path", nothing)
@@ -551,11 +551,14 @@ function precompilepkgs(pkgs::Vector{String}=String[];
     else
         target = "project"
     end
-    nconfig = length(configs)
-    if nconfig > 1
-        target *= " for $nconfig compilation configurations..."
-    else
+    nconfigs = length(configs)
+    if nconfigs == 1
+        if !isempty(only(configs)[1])
+            target *= " for configuration $(join(only(configs)[1], " "))"
+        end
         target *= "..."
+    else
+        target *= " for $nconfigs compilation configurations..."
     end
     @debug "precompile: packages filtered"
 
@@ -677,7 +680,7 @@ function precompilepkgs(pkgs::Vector{String}=String[];
                             loaded = warn_loaded && haskey(Base.loaded_modules, dep)
                             _name = haskey(exts, dep) ? string(exts[dep], " → ", dep.name) : dep.name
                             name = dep in direct_deps ? _name : string(color_string(_name, :light_black))
-                            if !isempty(config[1])
+                            if nconfigs > 1 && !isempty(config[1])
                                 config_str = "$(join(config[1], " "))"
                                 name *= color_string(" $(config_str)", :light_black)
                             end
@@ -769,7 +772,7 @@ function precompilepkgs(pkgs::Vector{String}=String[];
 
                         _name = haskey(exts, pkg) ? string(exts[pkg], " → ", pkg.name) : pkg.name
                         name = is_direct_dep ? _name : string(color_string(_name, :light_black))
-                        if !isempty(flags)
+                        if nconfigs > 1 && !isempty(flags)
                             config_str = "$(join(flags, " "))"
                             name *= color_string(" $(config_str)", :light_black)
                         end
