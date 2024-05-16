@@ -233,7 +233,7 @@ axes(A::HermOrSym) = axes(A.data)
     end
 end
 
-@inline function getindex(A::Symmetric, i::Integer, j::Integer)
+@inline function getindex(A::Symmetric, i::Int, j::Int)
     @boundscheck checkbounds(A, i, j)
     @inbounds if i == j
         return symmetric(A.data[i, j], sym_uplo(A.uplo))::symmetric_type(eltype(A.data))
@@ -243,7 +243,7 @@ end
         return transpose(A.data[j, i])
     end
 end
-@inline function getindex(A::Hermitian, i::Integer, j::Integer)
+@inline function getindex(A::Hermitian, i::Int, j::Int)
     @boundscheck checkbounds(A, i, j)
     @inbounds if i == j
         return hermitian(A.data[i, j], sym_uplo(A.uplo))::hermitian_type(eltype(A.data))
@@ -347,7 +347,7 @@ copy(A::Hermitian) = (Hermitian(parentof_applytri(copy, A), sym_uplo(A.uplo)))
 
 function copyto!(dest::Symmetric, src::Symmetric)
     if src.uplo == dest.uplo
-        copyto!(dest.data, src.data)
+        copytrito!(dest.data, src.data, src.uplo)
     else
         transpose!(dest.data, Base.unalias(dest.data, src.data))
     end
@@ -356,7 +356,7 @@ end
 
 function copyto!(dest::Hermitian, src::Hermitian)
     if src.uplo == dest.uplo
-        copyto!(dest.data, src.data)
+        copytrito!(dest.data, src.data, src.uplo)
     else
         adjoint!(dest.data, Base.unalias(dest.data, src.data))
     end
