@@ -42,6 +42,7 @@ Command-line option changes
 * Enabling or disabling color text in Julia can now be controlled with the
 [`NO_COLOR`](https://no-color.org/) or [`FORCE_COLOR`](https://force-color.org/) environment
 variables. ([#53742]).
+* `--project=@temp` starts Julia with a temporary environment.
 
 Multi-threading changes
 -----------------------
@@ -97,6 +98,8 @@ Standard library changes
 * Added keyword argument `alg` to `eigen`, `eigen!`, `eigvals` and `eigvals!` for self-adjoint
   matrix types (i.e., the type union `RealHermSymComplexHerm`) that allows one to switch
   between different eigendecomposition algorithms ([#49355]).
+* Added a generic version of the (unblocked) pivoted Cholesky decomposition
+  (callable via `cholesky[!](A, RowMaximum())`) ([#54619]).
 
 #### Logging
 
