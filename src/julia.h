@@ -309,17 +309,18 @@ typedef struct _jl_code_info_t {
     // miscellaneous data:
     jl_array_t *slotnames; // names of local variables
     jl_array_t *slotflags;  // local var bit flags
-    // the following are optional transient properties (not preserved by compression--as they typically get stored elsewhere):
+    // the following is a deprecated property (not preserved by compression)
     jl_value_t *slottypes; // inferred types of slots
+    // more inferred data:
+    jl_value_t *rettype; // return type relevant for fptr
     jl_method_instance_t *parent; // context (after inference, otherwise nothing)
-
-    // These may be used by generated functions to further constrain the resulting inputs.
-    // They are not used by any other part of the system and may be moved elsewhere in the
-    // future.
-    jl_value_t *method_for_inference_limit_heuristics; // optional method used during inference
-    jl_value_t *edges; // forward edges to method instances that must be invalidated (for copying to debuginfo)
+    // the following are required to cache the method correctly
+    jl_value_t *edges; // forward edge info (svec preferred, but tolerates Array{Any} and nothing token)
     size_t min_world;
     size_t max_world;
+
+    // These may be used by generated functions to further constrain the resulting inputs.
+    jl_value_t *method_for_inference_limit_heuristics; // optional method used during inference
     size_t nargs;
 
     // various boolean properties:
@@ -2374,6 +2375,7 @@ extern int had_exception;
     __eh_ct = jl_current_task;                                      \
     size_t __excstack_state = jl_excstack_state(__eh_ct);           \
     jl_enter_handler(__eh_ct, &__eh);                               \
+    __eh_ct->eh = &__eh;                                            \
     if (1)
     /* TRY BLOCK; */
 #define JL_CATCH                                                    \
@@ -2390,7 +2392,7 @@ extern int had_exception;
     size_t __excstack_state = jl_excstack_state(__eh_ct);           \
     jl_enter_handler(__eh_ct, &__eh);                               \
     if (!jl_setjmp(__eh.eh_ctx, 0))                                 \
-        for (i__try=1; i__try; i__try=0, /* TRY BLOCK; */  jl_eh_restore_state_noexcept(__eh_ct, &__eh))
+        for (i__try=1, __eh_ct->eh = &__eh; i__try; i__try=0, /* TRY BLOCK; */ jl_eh_restore_state_noexcept(__eh_ct, &__eh))
 
 #define JL_CATCH                                                    \
     else                                                            \
