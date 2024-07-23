@@ -1389,8 +1389,8 @@ implicitly begin blocks of code. See also [`;`](@ref).
 collection or the first index of a dimension of an array. For example,
 `a[begin]` is the first element of an array `a`.
 
-!!! compat "Julia 1.6"
-    Use of `begin` as an index requires Julia 1.6 or later.
+!!! compat "Julia 1.4"
+    Use of `begin` as an index requires Julia 1.4 or later.
 
 # Examples
 ```jldoctest
@@ -1451,8 +1451,20 @@ kw"struct"
     mutable struct
 
 `mutable struct` is similar to [`struct`](@ref), but additionally allows the
-fields of the type to be set after construction. See the manual section on
-[Composite Types](@ref) for more information.
+fields of the type to be set after construction.
+
+Individual fields of a mutable struct can be marked as `const` to make them immutable:
+
+```julia
+mutable struct Baz
+    a::Int
+    const b::Float64
+end
+```
+!!! compat "Julia 1.8"
+    The `const` keyword for fields of mutable structs requires at least Julia 1.8.
+
+See the manual section on [Composite Types](@ref) for more information.
 """
 kw"mutable struct"
 
