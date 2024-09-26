@@ -5151,7 +5151,7 @@ static jl_cgval_t emit_call_specfun_other(jl_codectx_t &ctx, bool is_opaque_clos
                     Value *val = arg.V;
                     SmallVector<Value*,0> roots(arg.inline_roots);
                     if (roots.empty())
-                        std::tie(val, roots) = split_value(ctx, arg, Align(jl_datatype_align(jt)));
+                        std::tie(val, roots) = split_value(ctx, arg, Align(julia_alignment(jt)));
                     AllocaInst *proots = emit_static_roots(ctx, roots.size());
                     for (size_t i = 0; i < roots.size(); i++)
                         ctx.builder.CreateAlignedStore(roots[i], emit_ptrgep(ctx, proots, i * sizeof(void*)), Align(sizeof(void*)));
@@ -6473,8 +6473,9 @@ static jl_cgval_t emit_expr(jl_codectx_t &ctx, jl_value_t *expr, ssize_t ssaidx_
         jl_value_t *val = expr;
         if (jl_is_quotenode(expr))
             val = jl_fieldref_noalloc(expr, 0);
-        if (jl_is_method(ctx.linfo->def.method)) // toplevel exprs are already rooted
-            val = jl_ensure_rooted(ctx, val);
+        // Toplevel exprs are rooted but because codegen assumes this is constant, it removes the write barriers for this code.
+        // This means we have to globally root the value here. (The other option would be to change how we optimize toplevel code)
+        val = jl_ensure_rooted(ctx, val);
         return mark_julia_const(ctx, val);
     }
 
@@ -7858,7 +7859,7 @@ static jl_returninfo_t get_specsig_function(jl_codectx_t &ctx, Module *M, Value 
             }
             props.cc = jl_returninfo_t::SRet;
             props.union_bytes = jl_datatype_size(jlrettype);
-            props.union_align = props.union_minalign = jl_datatype_align(jlrettype);
+            props.union_align = props.union_minalign = julia_alignment(jlrettype);
             // sret is always passed from alloca
             assert(M);
             fsig.push_back(rt->getPointerTo(M->getDataLayout().getAllocaAddrSpace()));
