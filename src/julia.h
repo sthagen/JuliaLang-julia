@@ -1128,20 +1128,25 @@ JL_DLLEXPORT void jl_finalize(jl_value_t *o);
 JL_DLLEXPORT void *jl_malloc_stack(size_t *bufsz, struct _jl_task_t *owner) JL_NOTSAFEPOINT;
 JL_DLLEXPORT void jl_free_stack(void *stkbuf, size_t bufsz);
 
+// Allocates a new weak-reference, assigns its value and increments Julia allocation
+// counters. If thread-local allocators are used, then this function should allocate in the
+// thread-local allocator of the current thread.
+JL_DLLEXPORT jl_weakref_t *jl_gc_new_weakref(jl_value_t *value);
+
 // GC write barriers
 
 STATIC_INLINE void jl_gc_wb(const void *parent, const void *ptr) JL_NOTSAFEPOINT
 {
     // parent and ptr isa jl_value_t*
-    if (__unlikely(jl_astaggedvalue(parent)->bits.gc == 3 && // parent is old and not in remset
-                   (jl_astaggedvalue(ptr)->bits.gc & 1) == 0)) // ptr is young
+    if (__unlikely(jl_astaggedvalue(parent)->bits.gc == 3 /* GC_OLD_MARKED */ && // parent is old and not in remset
+                   (jl_astaggedvalue(ptr)->bits.gc & 1 /* GC_MARKED */) == 0)) // ptr is young
         jl_gc_queue_root((jl_value_t*)parent);
 }
 
 STATIC_INLINE void jl_gc_wb_back(const void *ptr) JL_NOTSAFEPOINT // ptr isa jl_value_t*
 {
     // if ptr is old
-    if (__unlikely(jl_astaggedvalue(ptr)->bits.gc == 3)) {
+    if (__unlikely(jl_astaggedvalue(ptr)->bits.gc == 3 /* GC_OLD_MARKED */)) {
         jl_gc_queue_root((jl_value_t*)ptr);
     }
 }
