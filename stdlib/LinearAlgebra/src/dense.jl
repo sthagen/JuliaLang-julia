@@ -291,6 +291,35 @@ julia> diag(A,1)
 diag(A::AbstractMatrix, k::Integer=0) = A[diagind(A, k, IndexStyle(A))]
 
 """
+    diagview(M, k::Integer=0)
+
+Return a view into the `k`th diagonal of the matrix `M`.
+
+See also [`diag`](@ref), [`diagind`](@ref).
+
+# Examples
+```jldoctest
+julia> A = [1 2 3; 4 5 6; 7 8 9]
+3×3 Matrix{Int64}:
+ 1  2  3
+ 4  5  6
+ 7  8  9
+
+julia> diagview(A)
+3-element view(::Vector{Int64}, 1:4:9) with eltype Int64:
+ 1
+ 5
+ 9
+
+julia> diagview(A, 1)
+2-element view(::Vector{Int64}, 4:4:8) with eltype Int64:
+ 2
+ 6
+```
+"""
+diagview(A::AbstractMatrix, k::Integer=0) = @view A[diagind(A, k, IndexStyle(A))]
+
+"""
     diagm(kv::Pair{<:Integer,<:AbstractVector}...)
     diagm(m::Integer, n::Integer, kv::Pair{<:Integer,<:AbstractVector}...)
 
@@ -1039,6 +1068,11 @@ function inv(A::StridedMatrix{T}) where T
     return Ai
 end
 
+# helper function to perform a broadcast in-place if the destination is strided
+# otherwise, this performs an out-of-place broadcast
+@inline _broadcast!!(f, dest::StridedArray, args...) = broadcast!(f, dest, args...)
+@inline _broadcast!!(f, dest, args...) = broadcast(f, args...)
+
 """
     cos(A::AbstractMatrix)
 
@@ -1061,8 +1095,8 @@ function cos(A::AbstractMatrix{<:Real})
     elseif issymmetric(A)
         return copytri!(parent(cos(Symmetric(A))), 'U')
     end
-    T = complex(float(eltype(A)))
-    return real(exp!(T.(im .* A)))
+    M = im .* float.(A)
+    return real(exp_maybe_inplace(M))
 end
 function cos(A::AbstractMatrix{<:Complex})
     if isdiag(A)
@@ -1070,10 +1104,13 @@ function cos(A::AbstractMatrix{<:Complex})
     elseif ishermitian(A)
         return copytri!(parent(cos(Hermitian(A))), 'U', true)
     end
-    T = complex(float(eltype(A)))
-    X = exp!(T.(im .* A))
-    @. X = (X + $exp!(T(-im*A))) / 2
-    return X
+    M = im .* float.(A)
+    N = -M
+    X = exp_maybe_inplace(M)
+    Y = exp_maybe_inplace(N)
+    # Compute (X + Y)/2 and return the result.
+    # Compute the result in-place if X is strided
+    _broadcast!!((x,y) -> (x + y)/2, X, X, Y)
 end
 
 """
@@ -1098,8 +1135,8 @@ function sin(A::AbstractMatrix{<:Real})
     elseif issymmetric(A)
         return copytri!(parent(sin(Symmetric(A))), 'U')
     end
-    T = complex(float(eltype(A)))
-    return imag(exp!(T.(im .* A)))
+    M = im .* float.(A)
+    return imag(exp_maybe_inplace(M))
 end
 function sin(A::AbstractMatrix{<:Complex})
     if isdiag(A)
@@ -1107,14 +1144,13 @@ function sin(A::AbstractMatrix{<:Complex})
     elseif ishermitian(A)
         return copytri!(parent(sin(Hermitian(A))), 'U', true)
     end
-    T = complex(float(eltype(A)))
-    X = exp!(T.(im .* A))
-    Y = exp!(T.(.-im .* A))
-    @inbounds for i in eachindex(X, Y)
-        x, y = X[i]/2, Y[i]/2
-        X[i] = Complex(imag(x)-imag(y), real(y)-real(x))
-    end
-    return X
+    M = im .* float.(A)
+    Mneg = -M
+    X = exp_maybe_inplace(M)
+    Y = exp_maybe_inplace(Mneg)
+    # Compute (X - Y)/2im and return the result.
+    # Compute the result in-place if X is strided
+    _broadcast!!((x,y) -> (x - y)/2im, X, X, Y)
 end
 
 """
@@ -1144,8 +1180,8 @@ function sincos(A::AbstractMatrix{<:Real})
         cosA = copytri!(parent(symcosA), 'U')
         return sinA, cosA
     end
-    T = complex(float(eltype(A)))
-    c, s = reim(exp!(T.(im .* A)))
+    M =  im .* float.(A)
+    c, s = reim(exp_maybe_inplace(M))
     return s, c
 end
 function sincos(A::AbstractMatrix{<:Complex})
@@ -1155,15 +1191,25 @@ function sincos(A::AbstractMatrix{<:Complex})
         cosA = copytri!(parent(hermcosA), 'U', true)
         return sinA, cosA
     end
-    T = complex(float(eltype(A)))
-    X = exp!(T.(im .* A))
-    Y = exp!(T.(.-im .* A))
+    M = im .* float.(A)
+    Mneg = -M
+    X = exp_maybe_inplace(M)
+    Y = exp_maybe_inplace(Mneg)
+    _sincos(X, Y)
+end
+function _sincos(X::StridedMatrix, Y::StridedMatrix)
     @inbounds for i in eachindex(X, Y)
         x, y = X[i]/2, Y[i]/2
         X[i] = Complex(imag(x)-imag(y), real(y)-real(x))
         Y[i] = x+y
     end
     return X, Y
+end
+function _sincos(X, Y)
+    T = eltype(X)
+    S = T(0.5)*im .* (Y .- X)
+    C = T(0.5) .* (X .+ Y)
+    S, C
 end
 
 """
@@ -1205,8 +1251,9 @@ function cosh(A::AbstractMatrix)
         return copytri!(parent(cosh(Hermitian(A))), 'U', true)
     end
     X = exp(A)
-    @. X = (X + $exp!(float(-A))) / 2
-    return X
+    negA = @. float(-A)
+    Y = exp_maybe_inplace(negA)
+    _broadcast!!((x,y) -> (x + y)/2, X, X, Y)
 end
 
 """
@@ -1221,8 +1268,9 @@ function sinh(A::AbstractMatrix)
         return copytri!(parent(sinh(Hermitian(A))), 'U', true)
     end
     X = exp(A)
-    @. X = (X - $exp!(float(-A))) / 2
-    return X
+    negA = @. float(-A)
+    Y = exp_maybe_inplace(negA)
+    _broadcast!!((x,y) -> (x - y)/2, X, X, Y)
 end
 
 """
@@ -1237,15 +1285,20 @@ function tanh(A::AbstractMatrix)
         return copytri!(parent(tanh(Hermitian(A))), 'U', true)
     end
     X = exp(A)
-    Y = exp!(float.(.-A))
+    negA = @. float(-A)
+    Y = exp_maybe_inplace(negA)
+    X′, Y′ = _subadd!!(X, Y)
+    return X′ / Y′
+end
+function _subadd!!(X::StridedMatrix, Y::StridedMatrix)
     @inbounds for i in eachindex(X, Y)
         x, y = X[i], Y[i]
         X[i] = x - y
         Y[i] = x + y
     end
-    X /= Y
-    return X
+    return X, Y
 end
+_subadd!!(X, Y) = X - Y, X + Y
 
 """
     acos(A::AbstractMatrix)
@@ -1612,13 +1665,11 @@ function pinv(A::AbstractMatrix{T}; atol::Real = 0.0, rtol::Real = (eps(real(flo
         return similar(A, Tout, (n, m))
     end
     if isdiag(A)
-        indA = diagind(A)
-        dA = view(A, indA)
+        dA = diagview(A)
         maxabsA = maximum(abs, dA)
         tol = max(rtol * maxabsA, atol)
         B = fill!(similar(A, Tout, (n, m)), 0)
-        indB = diagind(B)
-        B[indB] .= (x -> abs(x) > tol ? pinv(x) : zero(x)).(dA)
+        diagview(B) .= (x -> abs(x) > tol ? pinv(x) : zero(x)).(dA)
         return B
     end
     SVD         = svd(A)
