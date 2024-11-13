@@ -6,13 +6,13 @@
 # the system image and simply returns that copy of the compiler. If not,
 # we proceed to load/precompile this as an ordinary package.
 if isdefined(Base, :generating_output) && Base.generating_output(true) &&
-        Base.samefile(Base._compiler_require_dependencies[1][2], @eval @__FILE__) &&
+        Base.samefile(joinpath(Sys.BINDIR, Base.DATAROOTDIR, Base._compiler_require_dependencies[1][2]), @eval @__FILE__) &&
         !Base.any_includes_stale(
-            map(Base.CacheHeaderIncludes, Base._compiler_require_dependencies),
+            map(Base.compiler_chi, Base._compiler_require_dependencies),
             "sysimg", nothing)
 
     Base.prepare_compiler_stub_image!()
-    append!(Base._require_dependencies, Base._compiler_require_dependencies)
+    append!(Base._require_dependencies, map(Base.expand_compiler_path, Base._compiler_require_dependencies))
     # There isn't much point in precompiling native code - downstream users will
     # specialize their own versions of the compiler code and we don't activate
     # the compiler by default anyway, so let's save ourselves some disk space.
@@ -57,7 +57,7 @@ using Base: Ordering, vect, EffectsOverride, BitVector, @_gc_preserve_begin, @_g
 using Base.Order
 import Base: getindex, setindex!, length, iterate, push!, isempty, first, convert, ==,
     copy, popfirst!, in, haskey, resize!, copy!, append!, last, get!, size,
-    get, iterate, findall, min_world, max_world, _topmod
+    get, iterate, findall, min_world, max_world, _topmod, isready
 
 const getproperty = Core.getfield
 const setproperty! = Core.setfield!
@@ -169,15 +169,7 @@ include("reflection_interface.jl")
 
 if isdefined(Base, :IRShow)
     @eval module IRShow
-        import ..Compiler
-        using Core.IR
-        using ..Base
-        import .Compiler: IRCode, CFG, scan_ssa_use!,
-            isexpr, compute_basic_blocks, block_for_inst, IncrementalCompact,
-            Effects, ALWAYS_TRUE, ALWAYS_FALSE, DebugInfoStream, getdebugidx,
-            VarState, InvalidIRError, argextype, widenconst, singleton_type,
-            sptypes_from_meth_instance, EMPTY_SPTYPES, InferenceState,
-            NativeInterpreter, CachedMethodTable, LimitedAccuracy, Timings
+        using ..Compiler: Compiler
         # During bootstrap, Base will later include this into its own "IRShow module"
         Compiler.include(IRShow, "ssair/show.jl")
     end
