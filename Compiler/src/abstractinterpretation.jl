@@ -207,14 +207,14 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(f),
         rettype = from_interprocedural!(interp, rettype, sv, arginfo, conditionals)
 
         # Also considering inferring the compilation signature for this method, so
-        # it is available to the compiler in case it ends up needing it for the invoke.
+        # it is available to the compiler, unless it should not end up needing it (for an invoke).
         if (isa(sv, InferenceState) && infer_compilation_signature(interp) &&
-            (seenall && 1 == napplicable) && !is_removable_if_unused(all_effects))
+            (seenall && 1 == napplicable) && (!is_removable_if_unused(all_effects) || !call_result_unused(si)))
             (; match) = applicable[1]
             method = match.method
             sig = match.spec_types
             mi = specialize_method(match; preexisting=true)
-            if mi !== nothing && !const_prop_methodinstance_heuristic(interp, mi, arginfo, sv)
+            if mi === nothing || !const_prop_methodinstance_heuristic(interp, mi, arginfo, sv)
                 csig = get_compileable_sig(method, sig, match.sparams)
                 if csig !== nothing && csig !== sig
                     abstract_call_method(interp, method, csig, match.sparams, multiple_matches, StmtInfo(false), sv)::Future
@@ -583,14 +583,6 @@ function abstract_call_method(interp::AbstractInterpreter,
             if infmi.specTypes::Type == sig::Type
                 # avoid widening when detecting self-recursion
                 # TODO: merge call cycle and return right away
-                if call_result_unused(si)
-                    add_remark!(interp, sv, RECURSION_UNUSED_MSG)
-                    # since we don't use the result (typically),
-                    # we have a self-cycle in the call-graph, but not in the inference graph (typically):
-                    # break this edge now (before we record it) by returning early
-                    # (non-typically, this means that we lose the ability to detect a guaranteed StackOverflow in some cases)
-                    return Future(MethodCallResult(Any, Any, Effects(), nothing, true, true))
-                end
                 topmost = nothing
                 edgecycle = true
                 break
@@ -2199,9 +2191,13 @@ function abstract_invoke(interp::AbstractInterpreter, arginfo::ArgInfo, si::Stmt
     env = tienv[2]::SimpleVector
     mresult = abstract_call_method(interp, method, ti, env, false, si, sv)::Future
     match = MethodMatch(ti, env, method, argtype <: method.sig)
+    ft_box = Core.Box(ft)
+    ft′_box = Core.Box(ft′)
     return Future{CallMeta}(mresult, interp, sv) do result, interp, sv
         (; rt, exct, effects, edge, volatile_inf_result) = result
-        res = nothing
+        local argtypes = arginfo.argtypes
+        local ft = ft_box.contents
+        local ft′ = ft′_box.contents
         sig = match.spec_types
         argtypes′ = invoke_rewrite(argtypes)
         fargs = arginfo.fargs
@@ -2637,6 +2633,14 @@ function abstract_call_opaque_closure(interp::AbstractInterpreter,
     ocsig = rewrap_unionall(Tuple{Tuple, ocargsig′.parameters...}, ocargsig)
     hasintersect(sig, ocsig) || return Future(CallMeta(Union{}, Union{MethodError,TypeError}, EFFECTS_THROWS, NoCallInfo()))
     ocmethod = closure.source::Method
+    if !isdefined(ocmethod, :source)
+        # This opaque closure was created from optimized source. We cannot infer it further.
+        ocrt = rewrap_unionall((unwrap_unionall(tt)::DataType).parameters[2], tt)
+        if isa(ocrt, DataType)
+            return Future(CallMeta(ocrt, Any, Effects(), NoCallInfo()))
+        end
+        return Future(CallMeta(Any, Any, Effects(), NoCallInfo()))
+    end
     match = MethodMatch(sig, Core.svec(), ocmethod, sig <: ocsig)
     mresult = abstract_call_method(interp, ocmethod, sig, Core.svec(), false, si, sv)
     ocsig_box = Core.Box(ocsig)
