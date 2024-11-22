@@ -1,9 +1,11 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+using Test
+
 include("irutils.jl")
 
 # tests for Compiler correctness and precision
-import .Compiler: Const, Conditional, ⊑, ReturnNode, GotoIfNot
+using .Compiler: Conditional, ⊑
 isdispatchelem(@nospecialize x) = !isa(x, Type) || Compiler.isdispatchelem(x)
 
 using Random, Core.IR
@@ -823,7 +825,7 @@ end
 
 # Issue 19641
 foo19641() = let a = 1.0
-    Compiler.return_type(x -> x + a, Tuple{Float64})
+    Base._return_type(x -> x + a, Tuple{Float64})
 end
 @inferred foo19641()
 
@@ -977,15 +979,15 @@ test_no_apply(::Any) = true
 
 # issue #20033
 # check return_type_tfunc for calls where no method matches
-bcast_eltype_20033(f, A) = Compiler.return_type(f, Tuple{eltype(A)})
+bcast_eltype_20033(f, A) = Base._return_type(f, Tuple{eltype(A)})
 err20033(x::Float64...) = prod(x)
 @test bcast_eltype_20033(err20033, [1]) === Union{}
 @test Base.return_types(bcast_eltype_20033, (typeof(err20033), Vector{Int},)) == Any[Type{Union{}}]
 # return_type on builtins
-@test Compiler.return_type(tuple, Tuple{Int,Int8,Int}) === Tuple{Int,Int8,Int}
+@test Base._return_type(tuple, Tuple{Int,Int8,Int}) === Tuple{Int,Int8,Int}
 
 # issue #21088
-@test Compiler.return_type(typeof, Tuple{Int}) == Type{Int}
+@test Base._return_type(typeof, Tuple{Int}) == Type{Int}
 
 # Inference of constant svecs
 @eval fsvecinf() = $(QuoteNode(Core.svec(Tuple{Int,Int}, Int)))[1]
@@ -1535,7 +1537,7 @@ let nfields_tfunc(@nospecialize xs...) =
     @test sizeof_nothrow(String)
     @test !sizeof_nothrow(Type{String})
     @test sizeof_tfunc(Type{Union{Int64, Int32}}) == Const(Core.sizeof(Union{Int64, Int32}))
-    let PT = Core.PartialStruct(Base.Compiler.fallback_lattice, Tuple{Int64,UInt64}, Any[Const(10), UInt64])
+    let PT = Core.PartialStruct(Compiler.fallback_lattice, Tuple{Int64,UInt64}, Any[Const(10), UInt64])
         @test sizeof_tfunc(PT) === Const(16)
         @test nfields_tfunc(PT) === Const(2)
         @test sizeof_nothrow(PT)
@@ -1721,7 +1723,7 @@ g_test_constant() = (f_constant(3) == 3 && f_constant(4) == 4 ? true : "BAD")
 f_pure_add() = (1 + 1 == 2) ? true : "FAIL"
 @test @inferred f_pure_add()
 
-import Core: Const
+using Core: Const
 mutable struct ARef{T}
     @atomic x::T
 end
@@ -1762,7 +1764,7 @@ let getfield_tfunc(@nospecialize xs...) =
     @test getfield_tfunc(ARef{Int},Const(:x),Bool,Bool) === Union{}
 end
 
-import .Compiler: Const
+using Core: Const
 mutable struct XY{X,Y}
     x::X
     y::Y
@@ -2235,7 +2237,7 @@ end
     end |> only == Int
     # the `fargs = nothing` edge case
     @test Base.return_types((Any,)) do a
-        Compiler.return_type(invoke, Tuple{typeof(ispositive), Type{Tuple{Any}}, Any})
+        Base._return_type(invoke, Tuple{typeof(ispositive), Type{Tuple{Any}}, Any})
     end |> only == Type{Bool}
 
     # `InterConditional` handling: `abstract_call_opaque_closure`
@@ -2765,10 +2767,10 @@ end |> only === Int
 
 # `apply_type_tfunc` accuracy for constrained type construction
 # https://github.com/JuliaLang/julia/issues/47089
-import Core: Const
-import .Compiler: apply_type_tfunc
 struct Issue47089{A<:Number,B<:Number} end
-let 𝕃 = Compiler.fallback_lattice
+let apply_type_tfunc = Compiler.apply_type_tfunc
+    𝕃 = Compiler.fallback_lattice
+    Const = Core.Const
     A = Type{<:Integer}
     @test apply_type_tfunc(𝕃, Const(Issue47089), A, A) <: (Type{Issue47089{A,B}} where {A<:Integer, B<:Integer})
     @test apply_type_tfunc(𝕃, Const(Issue47089), Const(Int), Const(Int), Const(Int)) === Union{}
@@ -3324,8 +3326,8 @@ _rttf_test(::Int16) = 0
 _rttf_test(::Int32) = 0
 _rttf_test(::Int64) = 0
 _rttf_test(::Int128) = 0
-_call_rttf_test() = Compiler.return_type(_rttf_test, Tuple{Any})
-@test Compiler.return_type(_rttf_test, Tuple{Any}) === Int
+_call_rttf_test() = Base._return_type(_rttf_test, Tuple{Any})
+@test Base._return_type(_rttf_test, Tuple{Any}) === Int
 @test _call_rttf_test() === Int
 
 f_with_Type_arg(::Type{T}) where {T} = T
@@ -3379,9 +3381,9 @@ struct FooPartial
     b::Int
     c::Int
 end
-let PT1 = PartialStruct(Base.Compiler.fallback_lattice, FooPartial, Any[Const(1), Const(2), Int]),
-    PT2 = PartialStruct(Base.Compiler.fallback_lattice, FooPartial, Any[Const(1), Int, Int]),
-    PT3 = PartialStruct(Base.Compiler.fallback_lattice, FooPartial, Any[Const(1), Int, Const(3)])
+let PT1 = PartialStruct(Compiler.fallback_lattice, FooPartial, Any[Const(1), Const(2), Int]),
+    PT2 = PartialStruct(Compiler.fallback_lattice, FooPartial, Any[Const(1), Int, Int]),
+    PT3 = PartialStruct(Compiler.fallback_lattice, FooPartial, Any[Const(1), Int, Const(3)])
 
     @test PT1 ⊑ PT2
     @test !(PT1 ⊑ PT3) && !(PT2 ⊑ PT1)
@@ -4554,7 +4556,8 @@ end |> only == Tuple{Int,Int}
 end |> only == Int
 
 # form PartialStruct for mutables with `const` field
-import .Compiler: Const, ⊑
+using Core: Const
+using .Compiler: ⊑
 mutable struct PartialMutable{S,T}
     const s::S
     t::T
@@ -4787,7 +4790,7 @@ end
 # at top level.
 @test let
     Base.Experimental.@force_compile
-    Compiler.return_type(+, NTuple{2, Rational})
+    Base._return_type(+, NTuple{2, Rational})
 end == Rational
 
 # vararg-tuple comparison within `Compiler.PartialStruct`
@@ -5185,9 +5188,9 @@ end |> only === Tuple{Int,Symbol}
     end
 end) == Type{Nothing}
 
-# Test that Compiler.return_type inference works for the 1-arg version
+# Test that Base._return_type inference works for the 1-arg version
 @test Base.return_types() do
-    Compiler.return_type(Tuple{typeof(+), Int, Int})
+    Base._return_type(Tuple{typeof(+), Int, Int})
 end |> only == Type{Int}
 
 # Test that NamedTuple abstract iteration works for PartialStruct/Const
@@ -5700,7 +5703,8 @@ let x = 1, _Any = Any
 end
 
 # Issue #51927
-let 𝕃 = Compiler.fallback_lattice
+let apply_type_tfunc = Compiler.apply_type_tfunc
+    𝕃 = Compiler.fallback_lattice
     @test apply_type_tfunc(𝕃, Const(Tuple{Vararg{Any,N}} where N), Int) == Type{NTuple{_A, Any}} where _A
 end
 
@@ -5723,7 +5727,7 @@ end
 @eval function has_tuin()
     $(Expr(:throw_undef_if_not, :x, false))
 end
-@test Compiler.return_type(has_tuin, Tuple{}) === Union{}
+@test Base.infer_return_type(has_tuin, Tuple{}) === Union{}
 @test_throws UndefVarError has_tuin()
 
 function gen_tuin_from_arg(world::UInt, source, _, _)
@@ -5778,7 +5782,7 @@ end
 
 # We want to make sure that both this returns `Tuple` and that
 # it doesn't infinite loop inside inference.
-@test Compiler.return_type(gen_infinite_loop_ssa, Tuple{}) === Tuple
+@test Base.infer_return_type(gen_infinite_loop_ssa, Tuple{}) === Tuple
 
 # inference local cache lookup with extended lattice elements that may be transformed
 # by `matching_cache_argtypes`
@@ -5814,7 +5818,7 @@ function foo54341(a, b, c, d, args...)
 end
 bar54341(args...) = foo54341(4, args...)
 
-@test Compiler.return_type(bar54341, Tuple{Vararg{Int}}) === Int
+@test Base.infer_return_type(bar54341, Tuple{Vararg{Int}}) === Int
 
 # `PartialStruct` for partially initialized structs:
 struct PartiallyInitialized1
@@ -5951,7 +5955,7 @@ end
 # InterConditional rt with Vararg argtypes
 fcondvarargs(a, b, c, d) = isa(d, Int64)
 gcondvarargs(a, x...) = return fcondvarargs(a, x...) ? isa(a, Int64) : !isa(a, Int64)
-@test Compiler.return_type(gcondvarargs, Tuple{Vararg{Any}}) === Bool
+@test Base.infer_return_type(gcondvarargs, Tuple{Vararg{Any}}) === Bool
 
 # JuliaLang/julia#55627: argtypes check in `abstract_call_opaque_closure`
 issue55627_make_oc() = Base.Experimental.@opaque (x::Int) -> 2x
@@ -6074,6 +6078,29 @@ function issue56387(nt::NamedTuple, field::Symbol=:a)
 end
 @test Base.infer_return_type(issue56387, (typeof((;a=1)),)) == Type{Int}
 
+# `apply_type_tfunc` with `Union` in its arguments
+let apply_type_tfunc = Compiler.apply_type_tfunc
+    𝕃 = Compiler.fallback_lattice
+    Const = Core.Const
+    @test apply_type_tfunc(𝕃, Any[Const(Vector), Union{Type{Int},Type{Nothing}}]) == Union{Type{Vector{Int}},Type{Vector{Nothing}}}
+end
+
+@test Base.infer_return_type((Bool,Int,)) do b, y
+    x = b ? 1 : missing
+    inner = y -> x + y
+    return inner(y)
+end == Union{Int,Missing}
+
+function issue31909(ys)
+    x = if @noinline rand(Bool)
+        1
+    else
+        missing
+    end
+    map(y -> x + y, ys)
+end
+@test Base.infer_return_type(issue31909, (Vector{Int},)) == Union{Vector{Int},Vector{Missing}}
+
 global setglobal!_refine::Int
 @test Base.infer_return_type((Integer,)) do x
     setglobal!(@__MODULE__, :setglobal!_refine, x)
@@ -6098,4 +6125,4 @@ function func_swapglobal!_must_throw(x)
     swapglobal!(@__MODULE__, :swapglobal!_must_throw, x)
 end
 @test Base.infer_return_type(func_swapglobal!_must_throw, (Int,); interp=SwapGlobalInterp()) === Union{}
-@test !Base.Compiler.is_effect_free(Base.infer_effects(func_swapglobal!_must_throw, (Int,); interp=SwapGlobalInterp()) )
+@test !Compiler.is_effect_free(Base.infer_effects(func_swapglobal!_must_throw, (Int,); interp=SwapGlobalInterp()) )
