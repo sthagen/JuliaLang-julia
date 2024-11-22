@@ -323,11 +323,11 @@ function abstract_call_gf_by_type(interp::AbstractInterpreter, @nospecialize(fun
                     if mi === nothing || !const_prop_methodinstance_heuristic(interp, mi, arginfo, sv)
                         csig = get_compileable_sig(method, sig, match.sparams)
                         if csig !== nothing && (!seenall || csig !== sig) # corresponds to whether the first look already looked at this, so repeating abstract_call_method is not useful
+                            #println(sig, " changed to ", csig, " for ", method)
                             sp_ = ccall(:jl_type_intersection_with_env, Any, (Any, Any), csig, method.sig)::SimpleVector
-                            if match.sparams === sp_[2]
-                                mresult = abstract_call_method(interp, method, csig, match.sparams, multiple_matches, StmtInfo(false, false), sv)::Future
-                                isready(mresult) || return false # wait for mresult Future to resolve off the callstack before continuing
-                            end
+                            sparams = sp_[2]::SimpleVector
+                            mresult = abstract_call_method(interp, method, csig, sparams, multiple_matches, StmtInfo(false, false), sv)::Future
+                            isready(mresult) || return false # wait for mresult Future to resolve off the callstack before continuing
                         end
                     end
                 end
@@ -1365,7 +1365,8 @@ function const_prop_call(interp::AbstractInterpreter,
         pop!(callstack)
         return nothing
     end
-    inf_result.ci_as_edge = codeinst_as_edge(interp, frame)
+    existing_edge = result.edge
+    inf_result.ci_as_edge = codeinst_as_edge(interp, frame, existing_edge)
     @assert frame.frameid != 0 && frame.cycleid == frame.frameid
     @assert frame.parentid == sv.frameid
     @assert inf_result.result !== nothing
@@ -2328,13 +2329,13 @@ function abstract_throw_methoderror(interp::AbstractInterpreter, argtypes::Vecto
     elseif !isvarargtype(argtypes[2])
         MethodError
     else
-        ⊔ = join(typeinf_lattice(interp))
-        MethodError ⊔ ArgumentError
+        Union{MethodError, ArgumentError}
     end
     return Future(CallMeta(Union{}, exct, EFFECTS_THROWS, NoCallInfo()))
 end
 
 const generic_getglobal_effects = Effects(EFFECTS_THROWS, consistent=ALWAYS_FALSE, inaccessiblememonly=ALWAYS_FALSE)
+const generic_getglobal_exct = Union{ArgumentError, TypeError, ConcurrencyViolationError, UndefVarError}
 function abstract_eval_getglobal(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool, @nospecialize(M), @nospecialize(s))
     ⊑ = partialorder(typeinf_lattice(interp))
     if M isa Const && s isa Const
@@ -2372,8 +2373,7 @@ function abstract_eval_getglobal(interp::AbstractInterpreter, sv::AbsIntState, s
     elseif !isvarargtype(argtypes[end]) || length(argtypes) > 5
         return CallMeta(Union{}, ArgumentError, EFFECTS_THROWS, NoCallInfo())
     else
-        return CallMeta(Any, Union{ArgumentError, UndefVarError, TypeError, ConcurrencyViolationError},
-            generic_getglobal_effects, NoCallInfo())
+        return CallMeta(Any, generic_getglobal_exct, generic_getglobal_effects, NoCallInfo())
     end
 end
 
@@ -2419,8 +2419,8 @@ function abstract_eval_setglobal!(interp::AbstractInterpreter, sv::AbsIntState, 
     if isa(M, Const) && isa(s, Const)
         M, s = M.val, s.val
         if M isa Module && s isa Symbol
-            exct = global_assignment_exct(interp, sv, saw_latestworld, GlobalRef(M, s), v)
-            return CallMeta(v, exct, Effects(setglobal!_effects, nothrow=exct===Bottom), NoCallInfo())
+            rt, exct = global_assignment_rt_exct(interp, sv, saw_latestworld, GlobalRef(M, s), v)
+            return CallMeta(rt, exct, Effects(setglobal!_effects, nothrow=exct===Bottom), NoCallInfo())
         end
         return CallMeta(Union{}, TypeError, EFFECTS_THROWS, NoCallInfo())
     end
@@ -2439,6 +2439,8 @@ function abstract_eval_setglobal!(interp::AbstractInterpreter, sv::AbsIntState, 
     return merge_exct(cm, goe)
 end
 
+const generic_setglobal!_exct = Union{ArgumentError, TypeError, ErrorException, ConcurrencyViolationError}
+
 function abstract_eval_setglobal!(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool, argtypes::Vector{Any})
     if length(argtypes) == 4
         return abstract_eval_setglobal!(interp, sv, saw_latestworld, argtypes[2], argtypes[3], argtypes[4])
@@ -2447,7 +2449,35 @@ function abstract_eval_setglobal!(interp::AbstractInterpreter, sv::AbsIntState, 
     elseif !isvarargtype(argtypes[end]) || length(argtypes) > 6
         return CallMeta(Union{}, ArgumentError, EFFECTS_THROWS, NoCallInfo())
     else
-        return CallMeta(Any, Union{ArgumentError, TypeError, ErrorException, ConcurrencyViolationError}, setglobal!_effects, NoCallInfo())
+        return CallMeta(Any, generic_setglobal!_exct, setglobal!_effects, NoCallInfo())
+    end
+end
+
+function abstract_eval_swapglobal!(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool,
+                                   @nospecialize(M), @nospecialize(s), @nospecialize(v))
+    scm = abstract_eval_setglobal!(interp, sv, saw_latestworld, M, s, v)
+    scm.rt === Bottom && return scm
+    gcm = abstract_eval_getglobal(interp, sv, saw_latestworld, M, s)
+    return CallMeta(gcm.rt, Union{scm.exct,gcm.exct}, merge_effects(scm.effects, gcm.effects), NoCallInfo())
+end
+
+function abstract_eval_swapglobal!(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool,
+                                   @nospecialize(M), @nospecialize(s), @nospecialize(v), @nospecialize(order))
+    scm = abstract_eval_setglobal!(interp, sv, saw_latestworld, M, s, v, order)
+    scm.rt === Bottom && return scm
+    gcm = abstract_eval_getglobal(interp, sv, saw_latestworld, M, s, order)
+    return CallMeta(gcm.rt, Union{scm.exct,gcm.exct}, merge_effects(scm.effects, gcm.effects), NoCallInfo())
+end
+
+function abstract_eval_swapglobal!(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool, argtypes::Vector{Any})
+    if length(argtypes) == 4
+        return abstract_eval_swapglobal!(interp, sv, saw_latestworld, argtypes[2], argtypes[3], argtypes[4])
+    elseif length(argtypes) == 5
+        return abstract_eval_swapglobal!(interp, sv, saw_latestworld, argtypes[2], argtypes[3], argtypes[4], argtypes[5])
+    elseif !isvarargtype(argtypes[end]) || length(argtypes) > 6
+        return CallMeta(Union{}, ArgumentError, EFFECTS_THROWS, NoCallInfo())
+    else
+        return CallMeta(Any, Union{generic_getglobal_exct,generic_setglobal!_exct}, setglobal!_effects, NoCallInfo())
     end
 end
 
@@ -2466,26 +2496,24 @@ function abstract_eval_setglobalonce!(interp::AbstractInterpreter, sv::AbsIntSta
     elseif !isvarargtype(argtypes[end]) || length(argtypes) > 6
         return CallMeta(Union{}, ArgumentError, EFFECTS_THROWS, NoCallInfo())
     else
-        return CallMeta(Bool, Union{ArgumentError, TypeError, ErrorException, ConcurrencyViolationError}, setglobal!_effects, NoCallInfo())
+        return CallMeta(Bool, generic_setglobal!_exct, setglobal!_effects, NoCallInfo())
     end
 end
 
 function abstract_eval_replaceglobal!(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool, argtypes::Vector{Any})
     if length(argtypes) in (5, 6, 7)
         (M, s, x, v) = argtypes[2], argtypes[3], argtypes[4], argtypes[5]
-
         T = nothing
         if isa(M, Const) && isa(s, Const)
             M, s = M.val, s.val
-            if !(M isa Module && s isa Symbol)
-                return CallMeta(Union{}, TypeError, EFFECTS_THROWS, NoCallInfo())
-            end
+            M isa Module || return CallMeta(Union{}, TypeError, EFFECTS_THROWS, NoCallInfo())
+            s isa Symbol || return CallMeta(Union{}, TypeError, EFFECTS_THROWS, NoCallInfo())
             partition = abstract_eval_binding_partition!(interp, GlobalRef(M, s), sv)
             rte = abstract_eval_partition_load(interp, partition)
             if binding_kind(partition) == BINDING_KIND_GLOBAL
                 T = partition_restriction(partition)
             end
-            exct = Union{rte.exct, global_assignment_binding_exct(partition, v)}
+            exct = Union{rte.exct, global_assignment_binding_rt_exct(interp, partition, v)[2]}
             effects = merge_effects(rte.effects, Effects(setglobal!_effects, nothrow=exct===Bottom))
             sg = CallMeta(Any, exct, effects, NoCallInfo())
         else
@@ -2506,7 +2534,7 @@ function abstract_eval_replaceglobal!(interp::AbstractInterpreter, sv::AbsIntSta
     elseif !isvarargtype(argtypes[end]) || length(argtypes) > 8
         return CallMeta(Union{}, ArgumentError, EFFECTS_THROWS, NoCallInfo())
     else
-        return CallMeta(Any, Union{ArgumentError, TypeError, ErrorException, ConcurrencyViolationError}, setglobal!_effects, NoCallInfo())
+        return CallMeta(Any, Union{generic_getglobal_exct,generic_setglobal!_exct}, setglobal!_effects, NoCallInfo())
     end
 end
 
@@ -2546,6 +2574,8 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
             return Future(abstract_eval_getglobal(interp, sv, si.saw_latestworld, argtypes))
         elseif f === Core.setglobal!
             return Future(abstract_eval_setglobal!(interp, sv, si.saw_latestworld, argtypes))
+        elseif f === Core.swapglobal!
+            return Future(abstract_eval_swapglobal!(interp, sv, si.saw_latestworld, argtypes))
         elseif f === Core.setglobalonce!
             return Future(abstract_eval_setglobalonce!(interp, sv, si.saw_latestworld, argtypes))
         elseif f === Core.replaceglobal!
@@ -3401,31 +3431,35 @@ function abstract_eval_globalref(interp::AbstractInterpreter, g::GlobalRef, saw_
     return ret
 end
 
-function global_assignment_exct(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool, g::GlobalRef, @nospecialize(newty))
+function global_assignment_rt_exct(interp::AbstractInterpreter, sv::AbsIntState, saw_latestworld::Bool, g::GlobalRef, @nospecialize(newty))
     if saw_latestworld
-        return Union{ErrorException, TypeError}
+        return Pair{Any,Any}(newty, Union{ErrorException, TypeError})
     end
     partition = abstract_eval_binding_partition!(interp, g, sv)
-    return global_assignment_binding_exct(partition, newty)
+    return global_assignment_binding_rt_exct(interp, partition, newty)
 end
 
-function global_assignment_binding_exct(partition::Core.BindingPartition, @nospecialize(newty))
+function global_assignment_binding_rt_exct(interp::AbstractInterpreter, partition::Core.BindingPartition, @nospecialize(newty))
     kind = binding_kind(partition)
-    if is_some_guard(kind) || is_some_const_binding(kind)
-        return ErrorException
+    if is_some_guard(kind)
+        return Pair{Any,Any}(newty, ErrorException)
+    elseif is_some_const_binding(kind)
+        return Pair{Any,Any}(Bottom, ErrorException)
     end
-
     ty = partition_restriction(partition)
-    if !(widenconst(newty) <: ty)
-        return TypeError
+    wnewty = widenconst(newty)
+    if !hasintersect(wnewty, ty)
+        return Pair{Any,Any}(Bottom, TypeError)
+    elseif !(wnewty <: ty)
+        retty = tmeet(typeinf_lattice(interp), newty, ty)
+        return Pair{Any,Any}(retty, TypeError)
     end
-
-    return Union{}
+    return Pair{Any,Any}(newty, Bottom)
 end
 
 function handle_global_assignment!(interp::AbstractInterpreter, frame::InferenceState, saw_latestworld::Bool, lhs::GlobalRef, @nospecialize(newty))
     effect_free = ALWAYS_FALSE
-    nothrow = global_assignment_exct(interp, frame, saw_latestworld, lhs, ignorelimited(newty)) === Union{}
+    nothrow = global_assignment_rt_exct(interp, frame, saw_latestworld, lhs, ignorelimited(newty))[2] === Union{}
     inaccessiblememonly = ALWAYS_FALSE
     if !nothrow
         sub_curr_ssaflag!(frame, IR_FLAG_NOTHROW)

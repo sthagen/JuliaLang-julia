@@ -1,11 +1,19 @@
 # This file is a part of Julia. License is MIT: https://julialang.org/license
 
+if !@isdefined(Compiler)
+    if Base.identify_package("Compiler") === nothing
+        import Base.Compiler: Compiler
+    else
+        import Compiler
+    end
+end
+
 using Core.IR
-using Core.Compiler: IRCode, IncrementalCompact, singleton_type, VarState
+using .Compiler: IRCode, IncrementalCompact, singleton_type, VarState
 using Base.Meta: isexpr
 using InteractiveUtils: gen_call_with_extracted_types_and_kwargs
 
-argextype(@nospecialize args...) = Core.Compiler.argextype(args..., VarState[])
+argextype(@nospecialize args...) = Compiler.argextype(args..., VarState[])
 code_typed1(args...; kwargs...) = first(only(code_typed(args...; kwargs...)))::CodeInfo
 macro code_typed1(ex0...)
     return gen_call_with_extracted_types_and_kwargs(__module__, :code_typed1, ex0)
@@ -38,7 +46,7 @@ end
 # check if `x` is a statically-resolved call of a function whose name is `sym`
 isinvoke(y) = @nospecialize(x) -> isinvoke(y, x)
 isinvoke(sym::Symbol, @nospecialize(x)) = isinvoke(mi->mi.def.name===sym, x)
-isinvoke(pred::Function, @nospecialize(x)) = isexpr(x, :invoke) && pred(x.args[1]::MethodInstance)
+isinvoke(pred::Function, @nospecialize(x)) = isexpr(x, :invoke) && pred((x.args[1]::CodeInstance).def)
 
 fully_eliminated(@nospecialize args...; retval=(@__FILE__), kwargs...) =
     fully_eliminated(code_typed1(args...; kwargs...); retval)
@@ -91,11 +99,11 @@ let m = Meta.@lower 1 + 1
                                 kwargs...)
         src = make_codeinfo(code; slottypes, kwargs...)
         if slottypes !== nothing
-            ir = Core.Compiler.inflate_ir(src, slottypes)
+            ir = Compiler.inflate_ir(src, slottypes)
         else
-            ir = Core.Compiler.inflate_ir(src)
+            ir = Compiler.inflate_ir(src)
         end
-        verify && Core.Compiler.verify_ir(ir)
+        verify && Compiler.verify_ir(ir)
         return ir
     end
 end
