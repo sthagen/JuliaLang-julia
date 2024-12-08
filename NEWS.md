@@ -17,6 +17,11 @@ New language features
   - atomic set once (`@atomiconce v[3] = 2`),
   - atomic swap (`x = @atomicswap v[3] = 2`), and
   - atomic replace (`x = @atomicreplace v[3] 2=>5`).
+- New option `--task-metrics=yes` to enable the collection of per-task timing information,
+  which can also be enabled/disabled at runtime with `Base.Experimental.task_metrics(::Bool)`. ([#56320])
+  The available metrics are:
+  - actual running time for the task (`Base.Experimental.task_running_time_ns`), and
+  - wall-time for the task (`Base.Experimental.task_wall_time_ns`).
 
 Language changes
 ----------------
@@ -166,6 +171,7 @@ Standard library changes
   in the REPL will now issue a warning the first time occurs. ([#54872])
 - When an object is printed automatically (by being returned in the REPL), its display is now truncated after printing 20 KiB.
   This does not affect manual calls to `show`, `print`, and so forth. ([#53959])
+- Backslash completions now print the respective glyph or emoji next to each matching backslash shortcode. ([#54800])
 
 #### SuiteSparse
 
