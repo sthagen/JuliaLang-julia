@@ -20,7 +20,6 @@
 #include "libsupport.h"
 #include <stdint.h>
 #include <string.h>
-#include <fenv.h>
 
 #include "htable.h"
 #include "arraylist.h"
@@ -468,7 +467,6 @@ typedef struct _jl_code_instance_t {
                                    // & 0b010 == invokeptr matches specptr
                                    // & 0b100 == From image
     _Atomic(uint8_t) precompile;  // if set, this will be added to the output system image
-    uint8_t relocatability;  // nonzero if all roots are built into sysimg or tagged by module key
     _Atomic(jl_callptr_t) invoke; // jlcall entry point usually, but if this codeinst belongs to an OC Method, then this is an jl_fptr_args_t fptr1 instead, unless it is not, because it is a special token object instead
     union _jl_generic_specptr_t {
         _Atomic(void*) fptr;
@@ -2314,9 +2312,6 @@ typedef struct _jl_task_t {
     _Atomic(uint64_t) finished_at;
 
 // hidden state:
-    // cached floating point environment
-    // only updated at task switch
-    fenv_t fenv;
 
     // id of owning thread - does not need to be defined until the task runs
     _Atomic(int16_t) tid;
