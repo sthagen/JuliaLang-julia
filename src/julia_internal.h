@@ -208,8 +208,7 @@ JL_DLLEXPORT void jl_lock_profile(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER;
 JL_DLLEXPORT void jl_unlock_profile(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
 JL_DLLEXPORT void jl_lock_profile_wr(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER;
 JL_DLLEXPORT void jl_unlock_profile_wr(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
-int jl_lock_stackwalk(void) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_ENTER;
-void jl_unlock_stackwalk(int lockret) JL_NOTSAFEPOINT JL_NOTSAFEPOINT_LEAVE;
+void jl_with_stackwalk_lock(void (*f)(void*) JL_NOTSAFEPOINT, void *ctx) JL_NOTSAFEPOINT;
 
 arraylist_t *jl_get_all_tasks_arraylist(void) JL_NOTSAFEPOINT;
 typedef struct {
@@ -1595,6 +1594,8 @@ JL_DLLEXPORT jl_value_t *jl_add_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_sub_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_mul_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_div_float(jl_value_t *a, jl_value_t *b);
+JL_DLLEXPORT jl_value_t *jl_min_float(jl_value_t *a, jl_value_t *b);
+JL_DLLEXPORT jl_value_t *jl_max_float(jl_value_t *a, jl_value_t *b);
 JL_DLLEXPORT jl_value_t *jl_fma_float(jl_value_t *a, jl_value_t *b, jl_value_t *c);
 JL_DLLEXPORT jl_value_t *jl_muladd_float(jl_value_t *a, jl_value_t *b, jl_value_t *c);
 
