@@ -41,11 +41,15 @@ static void check_c_types(const char *where, jl_value_t *rt, jl_value_t *at)
 
 // Resolve references to non-locally-defined variables to become references to global
 // variables in `module` (unless the rvalue is one of the type parameters in `sparam_vals`).
-static jl_value_t *resolve_definition_effects(jl_value_t *expr, jl_module_t *module, jl_svec_t *sparam_vals,
+static jl_value_t *resolve_definition_effects(jl_value_t *expr, jl_module_t *module, jl_svec_t *sparam_vals, jl_value_t *binding_edge,
                                    int binding_effects, int eager_resolve)
 {
     if (jl_is_symbol(expr)) {
         jl_error("Found raw symbol in code returned from lowering. Expected all symbols to have been resolved to GlobalRef or slots.");
+    }
+    if (jl_is_globalref(expr)) {
+        jl_maybe_add_binding_backedge((jl_globalref_t*)expr, module, binding_edge);
+        return expr;
     }
     if (!jl_is_expr(expr)) {
         return expr;
@@ -60,10 +64,10 @@ static jl_value_t *resolve_definition_effects(jl_value_t *expr, jl_module_t *mod
     }
     // These exprs are not fully linearized
     if (e->head == jl_assign_sym) {
-        jl_exprargset(e, 1, resolve_definition_effects(jl_exprarg(e, 1), module, sparam_vals, binding_effects, eager_resolve));
+        jl_exprargset(e, 1, resolve_definition_effects(jl_exprarg(e, 1), module, sparam_vals, binding_edge, binding_effects, eager_resolve));
         return expr;
     } else if (e->head == jl_new_opaque_closure_sym) {
-        jl_exprargset(e, 4, resolve_definition_effects(jl_exprarg(e, 4), module, sparam_vals, binding_effects, eager_resolve));
+        jl_exprargset(e, 4, resolve_definition_effects(jl_exprarg(e, 4), module, sparam_vals, binding_edge, binding_effects, eager_resolve));
         return expr;
     }
     size_t nargs = jl_array_nrows(e->args);
@@ -202,13 +206,13 @@ static jl_value_t *resolve_definition_effects(jl_value_t *expr, jl_module_t *mod
     return expr;
 }
 
-JL_DLLEXPORT void jl_resolve_definition_effects_in_ir(jl_array_t *stmts, jl_module_t *m, jl_svec_t *sparam_vals,
+JL_DLLEXPORT void jl_resolve_definition_effects_in_ir(jl_array_t *stmts, jl_module_t *m, jl_svec_t *sparam_vals, jl_value_t *binding_edge,
                               int binding_effects)
 {
     size_t i, l = jl_array_nrows(stmts);
     for (i = 0; i < l; i++) {
         jl_value_t *stmt = jl_array_ptr_ref(stmts, i);
-        jl_array_ptr_set(stmts, i, resolve_definition_effects(stmt, m, sparam_vals, binding_effects, 0));
+        jl_array_ptr_set(stmts, i, resolve_definition_effects(stmt, m, sparam_vals, binding_edge, binding_effects, 0));
     }
 }
 
@@ -600,8 +604,7 @@ static jl_value_t *jl_call_staged(jl_method_t *def, jl_value_t *generator,
     size_t totargs = 2 + n_sparams + def->nargs;
     JL_GC_PUSHARGS(gargs, totargs);
     gargs[0] = jl_box_ulong(world);
-    gargs[1] = jl_box_long(def->line);
-    gargs[1] = jl_new_struct(jl_linenumbernode_type, gargs[1], def->file);
+    gargs[1] = (jl_value_t*)def;
     memcpy(&gargs[2], jl_svec_data(sparam_vals), n_sparams * sizeof(void*));
     memcpy(&gargs[2 + n_sparams], args, (def->nargs - def->isva) * sizeof(void*));
     if (def->isva)
@@ -609,23 +612,6 @@ static jl_value_t *jl_call_staged(jl_method_t *def, jl_value_t *generator,
     jl_value_t *code = jl_apply_generic(generator, gargs, totargs);
     JL_GC_POP();
     return code;
-}
-
-// Lower `ex` into Julia IR, and (if it expands into a CodeInfo) resolve global-variable
-// references in light of the provided type parameters.
-// Like `jl_expand`, if there is an error expanding the provided expression, the return value
-// will be an error expression (an `Expr` with `error_sym` as its head), which should be eval'd
-// in the caller's context.
-JL_DLLEXPORT jl_code_info_t *jl_expand_and_resolve(jl_value_t *ex, jl_module_t *module,
-                                                   jl_svec_t *sparam_vals) {
-    jl_code_info_t *func = (jl_code_info_t*)jl_expand((jl_value_t*)ex, module);
-    JL_GC_PUSH1(&func);
-    if (jl_is_code_info(func)) {
-        jl_array_t *stmts = (jl_array_t*)func->code;
-        jl_resolve_definition_effects_in_ir(stmts, module, sparam_vals, 1);
-    }
-    JL_GC_POP();
-    return func;
 }
 
 JL_DLLEXPORT jl_code_instance_t *jl_cached_uninferred(jl_code_instance_t *codeinst, size_t world)
@@ -699,25 +685,12 @@ JL_DLLEXPORT jl_code_info_t *jl_code_for_staged(jl_method_instance_t *mi, size_t
         ex = jl_call_staged(def, generator, world, mi->sparam_vals, jl_svec_data(ttdt->parameters), jl_nparams(ttdt));
 
         // do some post-processing
-        if (jl_is_code_info(ex)) {
-            func = (jl_code_info_t*)ex;
-            jl_array_t *stmts = (jl_array_t*)func->code;
-            jl_resolve_definition_effects_in_ir(stmts, def->module, mi->sparam_vals, 1);
+        if (!jl_is_code_info(ex)) {
+            jl_error("As of Julia 1.12, generated functions must return `CodeInfo`. See `Base.generated_body_to_codeinfo`.");
         }
-        else {
-            // Lower the user's expression and resolve references to the type parameters
-            func = jl_expand_and_resolve(ex, def->module, mi->sparam_vals);
-            if (!jl_is_code_info(func)) {
-                if (jl_is_expr(func) && ((jl_expr_t*)func)->head == jl_error_sym) {
-                    ct->ptls->in_pure_callback = 0;
-                    jl_toplevel_eval(def->module, (jl_value_t*)func);
-                }
-                jl_error("The function body AST defined by this @generated function is not pure. This likely means it contains a closure, a comprehension or a generator.");
-            }
-            // TODO: This should ideally be in the lambda expression,
-            // but currently our isva determination is non-syntactic
-            func->isva = def->isva;
-        }
+        func = (jl_code_info_t*)ex;
+        jl_array_t *stmts = (jl_array_t*)func->code;
+        jl_resolve_definition_effects_in_ir(stmts, def->module, mi->sparam_vals, NULL, 1);
         ex = NULL;
 
         // If this generated function has an opaque closure, cache it for
@@ -773,6 +746,9 @@ JL_DLLEXPORT jl_code_info_t *jl_code_for_staged(jl_method_instance_t *mi, size_t
                     kind = data[i++];
                     if (jl_is_method_instance(kind)) {
                         jl_method_instance_add_backedge((jl_method_instance_t*)kind, jl_nothing, ci);
+                    }
+                    else if (jl_is_binding(kind)) {
+                        jl_add_binding_backedge((jl_binding_t*)kind, (jl_value_t*)ci);
                     }
                     else if (jl_is_mtable(kind)) {
                         assert(i < l);
@@ -925,7 +901,7 @@ JL_DLLEXPORT void jl_method_set_source(jl_method_t *m, jl_code_info_t *src)
             }
         }
         else {
-            st = resolve_definition_effects(st, m->module, sparam_vars, 1, 0);
+            st = resolve_definition_effects(st, m->module, sparam_vars, (jl_value_t*)m, 1, 0);
         }
         jl_array_ptr_set(copy, i, st);
     }
