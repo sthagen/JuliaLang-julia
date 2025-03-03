@@ -225,6 +225,10 @@ function lookup_binding_partition(world::UInt, b::Core.Binding)
     ccall(:jl_get_binding_partition, Ref{Core.BindingPartition}, (Any, UInt), b, world)
 end
 
+function lookup_binding_partition(world::UInt, b::Core.Binding, previous_partition::Core.BindingPartition)
+    ccall(:jl_get_binding_partition_with_hint, Ref{Core.BindingPartition}, (Any, Any, UInt), b, previous_partition, world)
+end
+
 function convert(::Type{Core.Binding}, gr::Core.GlobalRef)
     if isdefined(gr, :binding)
         return gr.binding
@@ -1145,6 +1149,32 @@ function fieldcount(@nospecialize t)
     end
     return fcount
 end
+
+function fieldcount_noerror(@nospecialize t)
+    if t isa UnionAll || t isa Union
+        t = argument_datatype(t)
+        if t === nothing
+            return nothing
+        end
+    elseif t === Union{}
+        return 0
+    end
+    t isa DataType || return nothing
+    if t.name === _NAMEDTUPLE_NAME
+        names, types = t.parameters
+        if names isa Tuple
+            return length(names)
+        end
+        if types isa DataType && types <: Tuple
+            return fieldcount_noerror(types)
+        end
+        return nothing
+    elseif isabstracttype(t) || (t.name === Tuple.name && isvatuple(t))
+        return nothing
+    end
+    return isdefined(t, :types) ? length(t.types) : length(t.name.names)
+end
+
 
 """
     fieldtypes(T::Type)
