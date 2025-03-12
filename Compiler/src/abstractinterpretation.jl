@@ -2156,7 +2156,11 @@ function form_partially_defined_struct(𝕃ᵢ::AbstractLattice, @nospecialize(o
     if fields[fldidx] === Union{}
         return nothing # `Union{}` field never transitions to be defined
     end
-    undefs = partialstruct_init_undefs(objt, fldcnt)
+    undefs = partialstruct_init_undefs(objt, fields)
+    if undefs === nothing
+        # this object never exists at runtime, avoid creating unprofitable `PartialStruct`
+        return nothing
+    end
     undefs[fldidx] = false
     return PartialStruct(𝕃ᵢ, objt0, undefs, fields)
 end
@@ -2618,6 +2622,8 @@ function abstract_call_known(interp::AbstractInterpreter, @nospecialize(f),
         arginfo::ArgInfo, si::StmtInfo, sv::AbsIntState,
         max_methods::Int = get_max_methods(interp, f, sv))
     (; fargs, argtypes) = arginfo
+    argtypes::Vector{Any} = arginfo.argtypes  # declare type because the closure below captures `argtypes`
+    fargs = arginfo.fargs
     la = length(argtypes)
     𝕃ᵢ = typeinf_lattice(interp)
     if isa(f, Builtin)
