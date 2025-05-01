@@ -104,7 +104,10 @@ end
 function finish!(interp::AbstractInterpreter, caller::InferenceState, validation_world::UInt, time_before::UInt64)
     result = caller.result
     #@assert last(result.valid_worlds) <= get_world_counter() || isempty(caller.edges)
-    if isdefined(result, :ci)
+    if caller.cache_mode === CACHE_MODE_LOCAL
+        @assert !isdefined(result, :ci)
+        result.src = transform_result_for_local_cache(interp, result)
+    elseif isdefined(result, :ci)
         edges = result_edges(interp, caller)
         ci = result.ci
         # if we aren't cached, we don't need this edge
@@ -115,21 +118,31 @@ function finish!(interp::AbstractInterpreter, caller::InferenceState, validation
             store_backedges(ci, edges)
         end
         inferred_result = nothing
-        uncompressed = inferred_result
+        uncompressed = result.src
         const_flag = is_result_constabi_eligible(result)
+        debuginfo = nothing
         discard_src = caller.cache_mode === CACHE_MODE_NULL || const_flag
         if !discard_src
             inferred_result = transform_result_for_cache(interp, result, edges)
+            if inferred_result !== nothing
+                uncompressed = inferred_result
+                debuginfo = get_debuginfo(inferred_result)
+                # Inlining may fast-path the global cache via `VolatileInferenceResult`, so store it back here
+                result.src = inferred_result
+            else
+                if isa(result.src, OptimizationState)
+                    debuginfo = get_debuginfo(ir_to_codeinf!(result.src))
+                elseif isa(result.src, CodeInfo)
+                    debuginfo = get_debuginfo(result.src)
+                end
+            end
             # TODO: do we want to augment edges here with any :invoke targets that we got from inlining (such that we didn't have a direct edge to it already)?
             if inferred_result isa CodeInfo
-                result.src = inferred_result
                 if may_compress(interp)
                     nslots = length(inferred_result.slotflags)
                     resize!(inferred_result.slottypes::Vector{Any}, nslots)
                     resize!(inferred_result.slotnames, nslots)
                 end
-                di = inferred_result.debuginfo
-                uncompressed = inferred_result
                 inferred_result = maybe_compress_codeinfo(interp, result.linfo, inferred_result)
                 result.is_src_volatile = false
             elseif ci.owner === nothing
@@ -137,18 +150,21 @@ function finish!(interp::AbstractInterpreter, caller::InferenceState, validation
                 inferred_result = nothing
             end
         end
-        if !@isdefined di
-            di = DebugInfo(result.linfo)
+        if debuginfo === nothing
+            debuginfo = DebugInfo(result.linfo)
         end
         time_now = _time_ns()
         time_self_ns = caller.time_self_ns + (time_now - time_before)
         time_total = (time_now - caller.time_start - caller.time_paused) * 1e-9
         ccall(:jl_update_codeinst, Cvoid, (Any, Any, Int32, UInt, UInt, UInt32, Any, Float64, Float64, Float64, Any, Any),
             ci, inferred_result, const_flag, first(result.valid_worlds), last(result.valid_worlds), encode_effects(result.ipo_effects),
-            result.analysis_results, time_total, caller.time_caches, time_self_ns * 1e-9, di, edges)
+            result.analysis_results, time_total, caller.time_caches, time_self_ns * 1e-9, debuginfo, edges)
         engine_reject(interp, ci)
         codegen = codegen_cache(interp)
-        if !discard_src && codegen !== nothing && uncompressed isa CodeInfo
+        if !discard_src && codegen !== nothing && (isa(uncompressed, CodeInfo) || isa(uncompressed, OptimizationState))
+            if isa(uncompressed, OptimizationState)
+                uncompressed = ir_to_codeinf!(uncompressed, edges)
+            end
             # record that the caller could use this result to generate code when required, if desired, to avoid repeating n^2 work
             codegen[ci] = uncompressed
             if bootstrapping_compiler && inferred_result == nothing
@@ -299,20 +315,113 @@ function adjust_cycle_frame!(sv::InferenceState, cycle_valid_worlds::WorldRange,
     return nothing
 end
 
+function get_debuginfo(src)
+    isa(src, CodeInfo) && return src.debuginfo
+    isa(src, OptimizationState) && return src.src.debuginfo
+    return nothing
+end
+
 function is_result_constabi_eligible(result::InferenceResult)
     result_type = result.result
     return isa(result_type, Const) && is_foldable_nothrow(result.ipo_effects) && is_inlineable_constant(result_type.val)
 end
 
-function transform_result_for_cache(::AbstractInterpreter, result::InferenceResult, edges::SimpleVector)
+function compute_inlining_cost(interp::AbstractInterpreter, result::InferenceResult)
+    src = result.src
+    isa(src, OptimizationState) || return MAX_INLINE_COST
+    compute_inlining_cost(interp, result, src.optresult)
+end
+
+function compute_inlining_cost(interp::AbstractInterpreter, result::InferenceResult, optresult#=::OptimizationResult=#)
+    return inline_cost_model(interp, result, optresult.inline_flag, optresult.ir)
+end
+
+function inline_cost_model(interp::AbstractInterpreter, result::InferenceResult,
+        inline_flag::UInt8, ir::IRCode)
+
+    inline_flag === SRC_FLAG_DECLARED_NOINLINE && return MAX_INLINE_COST
+
+    mi = result.linfo
+    (; def, specTypes) = mi
+    if !isa(def, Method)
+        return MAX_INLINE_COST
+    end
+
+    declared_inline = inline_flag === SRC_FLAG_DECLARED_INLINE
+
+    rt = result.result
+    @assert !(rt isa LimitedAccuracy)
+    rt = widenslotwrapper(rt)
+
+    sig = unwrap_unionall(specTypes)
+    if !(isa(sig, DataType) && sig.name === Tuple.name)
+        return MAX_INLINE_COST
+    end
+    if !declared_inline && rt === Bottom
+        return MAX_INLINE_COST
+    end
+
+    if declared_inline && isdispatchtuple(specTypes)
+        # obey @inline declaration if a dispatch barrier would not help
+        return MIN_INLINE_COST
+    else
+        # compute the cost (size) of inlining this code
+        params = OptimizationParams(interp)
+        cost_threshold = default = params.inline_cost_threshold
+        if ⊑(optimizer_lattice(interp), rt, Tuple) && !isconcretetype(widenconst(rt))
+            cost_threshold += params.inline_tupleret_bonus
+        end
+        # if the method is declared as `@inline`, increase the cost threshold 20x
+        if declared_inline
+            cost_threshold += 19*default
+        end
+        # a few functions get special treatment
+        if def.module === _topmod(def.module)
+            name = def.name
+            if name === :iterate || name === :unsafe_convert || name === :cconvert
+                cost_threshold += 4*default
+            end
+        end
+        return inline_cost_model(ir, params, cost_threshold)
+    end
+end
+
+function transform_result_for_local_cache(interp::AbstractInterpreter, result::InferenceResult)
+    if is_result_constabi_eligible(result)
+        return nothing
+    end
     src = result.src
     if isa(src, OptimizationState)
-        src = ir_to_codeinf!(src)
+        # Compute and store any information required to determine the inlineability of the callee.
+        opt = src
+        opt.src.inlining_cost = compute_inlining_cost(interp, result)
+    end
+    return src
+end
+
+function transform_result_for_cache(interp::AbstractInterpreter, result::InferenceResult, edges::SimpleVector)
+    inlining_cost = nothing
+    src = result.src
+    if isa(src, OptimizationState)
+        opt = src
+        inlining_cost = compute_inlining_cost(interp, result, opt.optresult)
+        discard_optimized_result(interp, opt, inlining_cost) && return nothing
+        src = ir_to_codeinf!(opt)
     end
     if isa(src, CodeInfo)
         src.edges = edges
+        if inlining_cost !== nothing
+            src.inlining_cost = inlining_cost
+        elseif may_optimize(interp)
+            src.inlining_cost = compute_inlining_cost(interp, result)
+        end
     end
     return src
+end
+
+function discard_optimized_result(interp::AbstractInterpreter, opt#=::OptimizationState=#, inlining_cost#=::InlineCostType=#)
+    may_discard_trees(interp) || return false
+    return inlining_cost == MAX_INLINE_COST
 end
 
 function maybe_compress_codeinfo(interp::AbstractInterpreter, mi::MethodInstance, ci::CodeInfo)
@@ -320,15 +429,9 @@ function maybe_compress_codeinfo(interp::AbstractInterpreter, mi::MethodInstance
     isa(def, Method) || return ci # don't compress toplevel code
     can_discard_trees = may_discard_trees(interp)
     cache_the_tree = !can_discard_trees || is_inlineable(ci)
-    if cache_the_tree
-        if may_compress(interp)
-            return ccall(:jl_compress_ir, String, (Any, Any), def, ci)
-        else
-            return ci
-        end
-    else
-        return nothing
-    end
+    cache_the_tree || return nothing
+    may_compress(interp) && return ccall(:jl_compress_ir, String, (Any, Any), def, ci)
+    return ci
 end
 
 function cache_result!(interp::AbstractInterpreter, result::InferenceResult, ci::CodeInstance)
@@ -368,11 +471,17 @@ function cycle_fix_limited(@nospecialize(typ), sv::InferenceState, cycleid::Int)
     return typ
 end
 
-function adjust_effects(ipo_effects::Effects, def::Method)
+function adjust_effects(ipo_effects::Effects, def::Method, world::UInt)
     # override the analyzed effects using manually annotated effect settings
     override = decode_effects_override(def.purity)
+    valid_worlds = WorldRange(0, typemax(UInt))
     if is_effect_overridden(override, :consistent)
-        ipo_effects = Effects(ipo_effects; consistent=ALWAYS_TRUE)
+        # See note on `typemax(Int)` instead of `deleted_world` in adjust_effects!
+        override_valid_worlds = WorldRange(def.primary_world, typemax(Int))
+        if world in override_valid_worlds
+            ipo_effects = Effects(ipo_effects; consistent=ALWAYS_TRUE)
+            valid_worlds = override_valid_worlds
+        end
     end
     if is_effect_overridden(override, :effect_free)
         ipo_effects = Effects(ipo_effects; effect_free=ALWAYS_TRUE)
@@ -400,7 +509,7 @@ function adjust_effects(ipo_effects::Effects, def::Method)
     if is_effect_overridden(override, :nortcall)
         ipo_effects = Effects(ipo_effects; nortcall=true)
     end
-    return ipo_effects
+    return (ipo_effects, valid_worlds)
 end
 
 function adjust_effects(sv::InferenceState)
@@ -454,7 +563,8 @@ function adjust_effects(sv::InferenceState)
     # override the analyzed effects using manually annotated effect settings
     def = sv.linfo.def
     if isa(def, Method)
-        ipo_effects = adjust_effects(ipo_effects, def)
+        (ipo_effects, valid_worlds) = adjust_effects(ipo_effects, def, sv.world.this)
+        update_valid_age!(sv, valid_worlds)
     end
 
     return ipo_effects
@@ -492,9 +602,9 @@ function finishinfer!(me::InferenceState, interp::AbstractInterpreter, cycleid::
         end
     end
     result = me.result
-    result.valid_worlds = me.world.valid_worlds
     result.result = bestguess
     ipo_effects = result.ipo_effects = me.ipo_effects = adjust_effects(me)
+    result.valid_worlds = me.world.valid_worlds
     result.exc_result = me.exc_bestguess = refine_exception_type(me.exc_bestguess, ipo_effects)
     me.src.rettype = widenconst(ignorelimited(bestguess))
     me.src.ssaflags = me.ssaflags
@@ -957,8 +1067,13 @@ function typeinf_edge(interp::AbstractInterpreter, method::Method, @nospecialize
                 update_valid_age!(caller, frame.world.valid_worlds)
                 local isinferred = is_inferred(frame)
                 local edge = isinferred ? edge_ci : nothing
-                local effects = isinferred ? frame.result.ipo_effects : # effects are adjusted already within `finish` for ipo_effects
-                    adjust_effects(effects_for_cycle(frame.ipo_effects), method)
+                local effects, valid_worlds
+                if isinferred
+                    effects = frame.result.ipo_effects # effects are adjusted already within `finish` for ipo_effects
+                else
+                    (effects, valid_worlds) = adjust_effects(effects_for_cycle(frame.ipo_effects), method, frame.world.this)
+                    update_valid_age!(caller, valid_worlds)
+                end
                 local bestguess = frame.bestguess
                 local exc_bestguess = refine_exception_type(frame.exc_bestguess, effects)
                 # propagate newly inferred source to the inliner, allowing efficient inlining w/o deserialization:
@@ -981,7 +1096,8 @@ function typeinf_edge(interp::AbstractInterpreter, method::Method, @nospecialize
     # return the current knowledge about this cycle
     frame = frame::InferenceState
     update_valid_age!(caller, frame.world.valid_worlds)
-    effects = adjust_effects(effects_for_cycle(frame.ipo_effects), method)
+    (effects, valid_worlds) = adjust_effects(effects_for_cycle(frame.ipo_effects), method, frame.world.this)
+    update_valid_age!(caller, valid_worlds)
     bestguess = frame.bestguess
     exc_bestguess = refine_exception_type(frame.exc_bestguess, effects)
     return Future(MethodCallResult(interp, caller, method, bestguess, exc_bestguess, effects, nothing, edgecycle, edgelimited))
@@ -1103,8 +1219,7 @@ function typeinf_frame(interp::AbstractInterpreter, mi::MethodInstance, run_opti
         else
             opt = OptimizationState(frame, interp)
             optimize(interp, opt, frame.result)
-            src = ir_to_codeinf!(opt)
-            src.edges = Core.svec(opt.inlining.edges...)
+            src = ir_to_codeinf!(opt, frame, Core.svec(opt.inlining.edges...))
         end
         result.src = frame.src = src
     end
