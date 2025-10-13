@@ -14,8 +14,7 @@ New language features
 
 Language changes
 ----------------
-* `mod(x::AbstractFloat, -Inf)` now returns `x` (as long as `x` is finite), this aligns with C standard and
-is considered a bug fix ([#47102])
+* `mod(x::AbstractFloat, -Inf)` now returns `x` (as long as `x` is finite), this aligns with C standard and is considered a bug fix ([#47102])
 
 * The `hash` algorithm and its values have changed for certain types, most notably AbstractString. Any `hash` specializations for equal types to those that changed, such as some third-party string packages, may need to be deleted. ([#57509], [#59691])
 
@@ -59,7 +58,7 @@ New library functions
 * Exporting function `fieldindex` to get the index of a struct's field ([#58119]).
 * `Base.donotdelete` is now public. It prevents deadcode elimination of its arguments ([#55774]).
 * `Sys.sysimage_target()` returns the CPU target string used to build the current system image ([#58970]).
-* `Iterators.findeach` is a lazy version of `findall` ([#54124])
+* `Iterators.findeach` is a lazy version of `findall` ([#54124]).
 
 New library features
 --------------------
@@ -111,6 +110,10 @@ Standard library changes
 
 * Introspection utilities such as `@code_typed`, `@which` and `@edit` now accept type annotations as substitutes for values, recognizing forms such as `f(1, ::Float64, 3)` or even `sum(::Vector{T}; init = ::T) where {T<:Real}`. Type-annotated variables as in `f(val::Int; kw::Float64)` are not evaluated if the type annotation provides the necessary information, making this syntax compatible with signatures found in stacktraces ([#57909], [#58222]).
 * Code introspection macros such as `@code_lowered` and `@code_typed` now have a much better support for broadcasting expressions, including broadcasting assignments of the form `x .+= f(y)` ([#58349]).
+
+#### Dates
+
+* `isoweekdate, isoyear, weeksinyear` are now implemented and available for week based calendars, following [https://en.wikipedia.org/wiki/ISO_week_date](ISO week date). [#48507]
 
 External dependencies
 ---------------------
