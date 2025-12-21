@@ -51,7 +51,7 @@ end
 
 function contains_ssa_binding(ctx, ex)
     contains_unquoted(ex) do e
-        kind(e) == K"BindingId" && lookup_binding(ctx, e).is_ssa
+        kind(e) == K"BindingId" && get_binding(ctx, e).is_ssa
     end
 end
 
@@ -611,10 +611,11 @@ function replace_beginend(ctx, ex, arr, n, splats, is_last)
             replace_beginend(ctx, ex[1], arr, n, splats, is_last)
             ex[2:end]...
         ]
-    # elseif k == K"kw" - keyword args - what does this mean here?
-    #   # note from flisp
-    #   # TODO: this probably should not be allowed since keyword args aren't
-    #   # positional, but in this context we have just used their positions anyway
+    elseif k == K"kw"
+        # note from flisp
+        # TODO: this probably should not be allowed since keyword args aren't
+        # positional, but in this context we have just used their positions anyway
+        @ast ctx ex [K"kw" ex[1] replace_beginend(ctx, ex[2], arr, n, splats, is_last)]
     else
         mapchildren(e->replace_beginend(ctx, e, arr, n, splats, is_last), ctx, ex)
     end
@@ -1112,7 +1113,7 @@ function flatten_ncat_rows!(flat_elems, nrow_spans, row_major, parent_layout_dim
         layout_dim = 1
         @chk parent_layout_dim != 1 (ex,"Badly nested rows in `ncat`")
     elseif k == K"nrow"
-        dim = numeric_flags(ex)
+        dim = JuliaSyntax.numeric_flags(ex)
         @chk dim > 0                (ex,"Unsupported dimension $dim in ncat")
         @chk !row_major || dim != 2 (ex,"2D `nrow` cannot be mixed with `row` in `ncat`")
         layout_dim = nrow_flipdim(row_major, dim)
@@ -1145,7 +1146,7 @@ end
 # - ragged column first or row first
 function expand_ncat(ctx, ex)
     is_typed = kind(ex) == K"typed_ncat"
-    outer_dim = numeric_flags(ex)
+    outer_dim = JuliaSyntax.numeric_flags(ex)
     @chk outer_dim > 0 (ex,"Unsupported dimension in ncat")
     eltype      = is_typed ? ex[1]     : nothing
     elements    = is_typed ? ex[2:end] : ex[1:end]
@@ -1250,7 +1251,7 @@ function expand_unionall_def(ctx, srcref, lhs, rhs, is_const=true)
     expand_forms_2(
         ctx,
         @ast ctx srcref [K"block"
-            rr := [K"where" rhs lhs[2:end]...]
+            rr := [K"where" rhs [K"braces" lhs[2:end]...]]
             [is_const ? K"constdecl" : K"assign_or_constdecl_if_global" name rr]
             [K"removable" rr]
         ]
@@ -2166,9 +2167,9 @@ function make_lhs_decls(ctx, stmts, declkind, declmeta, ex, type_decls=true)
         # other Exprs that cannot be produced by the parser (tested by
         # test/precompile.jl #50538).
         if !isnothing(declmeta)
-            push!(stmts, makenode(ctx, ex, declkind, ex; meta=declmeta))
+            push!(stmts, makenode(ctx, ex, declkind, NodeId[ex._id], [:meta=>declmeta]))
         else
-            push!(stmts, makenode(ctx, ex, declkind, ex))
+            push!(stmts, makenode(ctx, ex, declkind, NodeId[ex._id]))
         end
     elseif k == K"Placeholder"
         nothing
@@ -2177,7 +2178,7 @@ function make_lhs_decls(ctx, stmts, declkind, declmeta, ex, type_decls=true)
             @chk numchildren(ex) == 2
             name = ex[1]
             if kind(name) == K"Identifier"
-                push!(stmts, makenode(ctx, ex, K"decl", name, ex[2]))
+                push!(stmts, makenode(ctx, ex, K"decl", NodeId[name._id, ex[2]._id]))
             else
                 # TODO: Currently, this ignores the LHS in `_::T = val`.
                 # We should probably do one of the following:
@@ -2207,7 +2208,7 @@ function expand_decls(ctx, ex)
     bindings = children(ex)
     stmts = SyntaxList(ctx)
     for binding in bindings
-        if is_prec_assignment(kind(binding))
+        if JuliaSyntax.is_prec_assignment(kind(binding))
             @chk numchildren(binding) == 2
             # expand_assignment will create the type decls
             make_lhs_decls(ctx, stmts, declkind, declmeta, binding[1], false)
@@ -2516,7 +2517,7 @@ function expand_function_generator(ctx, srcref, callex_srcref, func_name, func_n
     # Apply nospecialize to all arguments to prevent so much codegen and add
     # Core.Any type for them
     for i in first_trailing_arg:length(gen_arg_names)
-        gen_arg_names[i] = setmeta(gen_arg_names[i]; nospecialize=true)
+        gen_arg_names[i] = setmeta(gen_arg_names[i], :nospecialize, true)
         push!(gen_arg_types, @ast ctx gen_arg_names[i] "Any"::K"core")
     end
     # Code generator definition
@@ -2970,6 +2971,9 @@ function expand_function_def(ctx, ex, docs, rewrite_call=identity, rewrite_body=
         name
     elseif kind(name) == K"tuple"
         # Anonymous function syntax `function (x,y) ... end`
+        name = mapchildren(ctx, name) do a
+            kind(a) === K"=" ? @ast(ctx, a, [K"kw" children(a)...]) : a
+        end
         @ast ctx name [K"call"
             "#anon#"::K"Placeholder"
             children(name)...
@@ -4181,6 +4185,7 @@ function expand_where(ctx, srcref, lhs, rhs)
 end
 
 function expand_wheres(ctx, ex)
+    @chk numchildren(ex) == 2
     body = ex[1]
     rhs = ex[2]
     if kind(rhs) == K"braces"

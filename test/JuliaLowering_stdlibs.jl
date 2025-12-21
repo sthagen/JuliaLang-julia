@@ -1,10 +1,16 @@
 import Libdl
 
-### 38 / 52 (non-sysimage) stdlibs precompile successfully with JuliaLowering ###
+# known precompilation failures under JL
 const INCOMPATIBLE_STDLIBS = String[
-    "Statistics", "JuliaSyntaxHighlighting", "Markdown", "LibGit2",
-    "InteractiveUtils", "Test", "REPL", "Pkg", "LazyArtifacts", "SparseArrays",
-    "TOML", "StyledStrings", "Profile", "SuiteSparse",
+    "InteractiveUtils", # Invalid function name
+    "LibGit2", # op isa Symbol (JuliaLang/JuliaLowering.jl#126)
+    "SparseArrays", # type-alias bug (JuliaLang/JuliaLowering.jl#123)
+    "TOML", # @invokelatest / QuoteNode bug
+    "Test", # depends on InteractiveUtils
+    "REPL", # depends on InteractiveUtils
+    "Pkg", # depends on TOML
+    "SuiteSparse", # depends on SparseArrays
+    "LazyArtifacts", # depends on Pkg
 ]
 
 const JULIA_EXECUTABLE = Base.unsafe_string(Base.JLOptions().julia_bin)

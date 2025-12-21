@@ -435,6 +435,8 @@ function _to_lowered_expr(ex::SyntaxTree, stmt_offset::Int)
                k == K"="         ? :(=)        :
                k == K"leave"     ? :leave      :
                k == K"isdefined" ? :isdefined  :
+               k == K"loopinfo"  ? :loopinfo   :
+               k == K"boundscheck"       ? :boundscheck       :
                k == K"latestworld"       ? :latestworld       :
                k == K"pop_exception"     ? :pop_exception     :
                k == K"captured_local"    ? :captured_local    :
@@ -532,3 +534,5 @@ function include_string(mod::Module, code::AbstractString, filename::AbstractStr
                         expr_compat_mode=false)
     eval(mod, parseall(SyntaxTree, code; filename=filename); expr_compat_mode)
 end
+
+include(path::AbstractString) = include(JuliaLowering, path)
