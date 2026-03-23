@@ -224,7 +224,7 @@ vst1(vcx::Validation1Context, st::SyntaxTree)::ValidationResult = @stm st begin
     [K".&&" x y] -> vst1(vcx, x) & vst1(vcx, y)
     [K".||" x y] -> vst1(vcx, x) & vst1(vcx, y)
     (_, when=(vr=vst1_arraylike(vcx, st); is_known(vr))) -> vr
-    # syntax TODO: disallowpre-desugared const, broken with complex rhs
+    # syntax TODO: disallow pre-desugared const, broken with complex rhs
     [K"const" l r] -> vst1_ident(vcx, l; lhs=true) & vst1(vcx, r)
     [K"const" [K"global" x]] -> !vcx.toplevel ?
         @fail(st, "unsupported `const` inside function") :
@@ -469,7 +469,7 @@ vst1_try(vcx, st) = @stm st begin
     _ -> @fail(st, "malformed `try` expression")
 end
 
-vst1_try_catchvar(vcx, st) = @stm st begin
+vst1_try_catchvar(_vcx, st) = @stm st begin
     [K"Identifier"] -> pass()
     ([K"Value"], when=st.value===false) -> pass()
 end
@@ -497,7 +497,7 @@ end
 
 # syntax TODO: all-underscore variables may be read from with dot syntax
 # syntax TODO: disallow string
-vst1_simple_dot_rhs(vcx, st; lhs=false) = @stm st begin
+vst1_simple_dot_rhs(vcx, st) = @stm st begin
     [K"inert" x] -> vst1_simple_dot_rhs(vcx, x)
     [K"Identifier"] -> pass()
     [K"String"] -> pass()
@@ -562,10 +562,11 @@ vst1_call_arg(vcx, st) = @stm st begin
 end
 
 # Arg to `parameters` (post-semicolon) in a call (not function decl).  Stricter
-# than `vst1_call_arg`.
+# than `vst1_call_arg`.  `=` desugars to `kw`.
 vst1_call_kwarg(vcx, st) = @stm st begin
     [K"Identifier"] -> pass()
     [K"kw" id val] -> vst1_ident(vcx, id; lhs=true) & vst1(vcx, val)
+    [K"=" id val] -> vst1_ident(vcx, id; lhs=true) & vst1(vcx, val)
     [K"..." x] -> vst1(vcx, x)
     [K"." x [K"inert" id]] -> vst1(vcx, x) & vst1_ident(vcx, id; lhs=true)
     ([K"call" [K"Identifier"] symval v], when=(st[1].name_val==="=>")) ->
@@ -629,7 +630,7 @@ vst1_function_calldecl(vcx, st) = @stm st begin
     _ -> vst1_simple_calldecl(vcx, st)
 end
 
-vst1_simple_calldecl(vcx, st; in_macro=false) = @stm st begin
+vst1_simple_calldecl(vcx, st) = @stm st begin
     [K"call" f [K"parameters" _...] ps...] ->
         vst1_calldecl_name(vcx, f) &
         _calldecl_positionals(vcx, ps, K"kw") &
@@ -1031,7 +1032,6 @@ function valid_st0(st::SyntaxTree)
         isempty(err.sts) || !(kind(err.sts[1]) === K"macrocall")
     end
     vr2 = ValidationResult(isempty(vr2_errors), vr2_errors)
-    showerrors(vr2)
     return vr2.ok
 end
 

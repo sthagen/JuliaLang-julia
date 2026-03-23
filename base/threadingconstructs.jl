@@ -294,7 +294,7 @@ function _threadsfor_single_iterator(body, iterator, condition, schedule, dims=n
     func = if schedule === :greedy
         greedy_comprehension_func(esc_range, esc_lidx, esc_body, esc_condition)
     else
-        default_comprehension_func(esc_range, esc_lidx, esc_body, esc_condition)
+        default_comprehension_func(esc_range, esc_lidx, esc_body, esc_condition, result_type)
     end
 
     result_expr = if schedule === :greedy
@@ -313,28 +313,28 @@ function _threadsfor_single_iterator(body, iterator, condition, schedule, dims=n
             end
         end
     else
-        # Default/static/dynamic: sort by index to preserve iteration order
+        # Default/static: thread-local buffers, vcat in tid order preserves iteration order.
+        # For the untyped case, we try vcat first (fast bulk copies). If the buffers have
+        # a Union or Any element type — indicating a type-unstable body — we fall back to
+        # grow_to! which replicates serial's promote_typejoin widening.
         if result_type !== nothing
             esc_result_type = esc(result_type)
             quote
-                close(result_channel)
-                pairs = collect(result_channel)
-                if isempty(pairs)
-                    $esc_result_type[]
-                else
-                    sort!(pairs, by=first)
-                    $esc_result_type[p[2] for p in pairs]
-                end
+                vcat(result_channel...)::Vector{$esc_result_type}
             end
         else
             quote
-                close(result_channel)
-                pairs = collect(result_channel)
-                if isempty(pairs)
-                    []
-                else
-                    sort!(pairs, by=first)
-                    [p[2] for p in pairs]
+                let _bufs = result_channel
+                    _ET = eltype(eltype(_bufs))
+                    if isconcretetype(_ET)
+                        # All buffers have a concrete element type (from promote_op inference
+                        # or a uniform body). Use bulk vcat — same result as grow_to! here.
+                        vcat(_bufs...)
+                    else
+                        # Type-unstable body: grow_to! discovers the correct widened type,
+                        # matching the return type of the equivalent serial comprehension.
+                        Base.grow_to!(Any[], Iterators.flatten(_bufs))
+                    end
                 end
             end
         end
@@ -461,21 +461,21 @@ end
 function greedy_comprehension_func(itr, esc_lidx, esc_body, esc_condition)
     quote
         let c = Channel{eltype($itr)}(threadpoolsize(), spawn=true) do ch
-            for item in $itr
-                put!(ch, item)
-            end
-        end
-        result_channel = Channel{Any}(Inf)
-
-        function threadsfor_fun(tid)
-            for item in c
-                local $esc_lidx = item
-                if $esc_condition
-                    put!(result_channel, $esc_body)
+                for item in $itr
+                    put!(ch, item)
                 end
             end
-        end
-        result_channel
+            result_channel = Channel{Any}(Inf)
+
+            function threadsfor_fun(tid)
+                for item in c
+                    local $esc_lidx = item
+                    if $esc_condition
+                        put!(result_channel, $esc_body)
+                    end
+                end
+            end
+            result_channel
         end
     end
 end
@@ -531,27 +531,42 @@ function default_func(itr, lidx, lbody)
     end
 end
 
-function default_comprehension_func(itr, esc_lidx, esc_body, esc_condition)
+function default_comprehension_func(itr, esc_lidx, esc_body, esc_condition, result_type=nothing)
     work_dist = _work_distribution_code()
+    if result_type !== nothing
+        # Typed comprehension: element type known at macro expansion time.
+        buf_init = :($(esc(result_type))[])
+        buf_type_setup = :()
+    else
+        # Untyped comprehension: use promote_op to pre-type the per-task buffers,
+        # avoiding boxing in the parallel phase for type-stable bodies.
+        # The result is flattened through grow_to! so the final element type matches
+        # serial's runtime promote_typejoin widening rather than the static promote_op type.
+        _ET = gensym(:ET)
+        buf_type_setup = :(local $_ET = Base.promote_op($esc_lidx -> $esc_body, eltype(items)))
+        buf_init = :($_ET[])
+    end
     quote
         let iter = $itr
-        # Collect non-indexable iterators for random access (r[i]) in work distribution
-        items = iter isa AbstractArray ? iter : collect(iter)
-        # Channel uses Tuple{Int, Any} because the output type of the body expression
-        # is not known at macro expansion time.
-        result_channel = Channel{Tuple{Int, Any}}(Inf)
+        local items = iter isa Union{Tuple, AbstractArray} ? iter : collect(iter)
+        local _npool = threadpoolsize()
+        $buf_type_setup
+        # One buffer per task-id; tasks process contiguous ranges so concatenating
+        # in tid order preserves iteration order without a sort step.
+        local local_bufs = [$buf_init for _ in 1:_npool]
 
         function threadsfor_fun(tid = 1; onethread = false)
             # Reads: items, tid, onethread. Defines: r, loop_first, loop_last.
             $work_dist
+            local buf = local_bufs[tid]
             for i = loop_first:loop_last
                 local $esc_lidx = @inbounds r[i]
                 if $esc_condition
-                    put!(result_channel, (i, $esc_body))
+                    push!(buf, $esc_body)
                 end
             end
         end
-        result_channel  # Return channel so results can be collected after threading_run
+        local_bufs  # Return per-task buffers to be vcat'd after threading_run
         end
     end
 end
