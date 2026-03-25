@@ -239,6 +239,41 @@ function _dst_importpath(st::SyntaxTree)
     end
 end
 
+_dst_eq_to_kw(st::SyntaxTree) = @stm st begin
+    [K"=" l r] -> @ast st._graph st [K"kw" l r]
+    x -> x
+end
+
+# flisp: tuple-to-arglist.  Fix parsing mistakes where anon function arglist is
+# parsed as a block instead of a tuple, or uses `=` instead of `kw`.  Note
+# return type annotations are not possible on an anonymous function.
+# (a::T)->1
+# (::T)->1
+# (a...)->1
+# (a=1)->1
+# (a=1;)->1
+# (a=1;b=1)->1
+function _dst_fix_arglist(st::SyntaxTree)
+    g = st._graph
+    @stm st begin
+        [K"::" [K"call" _...] _] -> st
+        [K"call" _...] -> st
+        [K"tuple" xs...] -> let fixed = mapsyntax(_dst_eq_to_kw, xs)
+            fixed == xs ? st : @ast g st [K"tuple" fixed...]
+        end
+        [K"where" x tvs...] -> let fixed = _dst_fix_arglist(x)
+            fixed == x ? st : @ast g st [K"where" fixed tvs...]
+        end
+        [K"block" x1 x2] ->
+            @ast g st [K"tuple" _dst_eq_to_kw(x1)
+                       [K"parameters" _dst_eq_to_kw(x2)]]
+        [K"block" x] -> @ast g st [K"tuple" _dst_eq_to_kw(x)]
+        [K"block"] -> @ast g st [K"tuple"]
+        [K"block" _...] -> @jl_assert false st
+        x -> @ast g st [K"tuple" _dst_eq_to_kw(x)]
+    end
+end
+
 _is_false(st::SyntaxTree) = kind(st) === K"Value" && st.value === false
 
 function _expand_literal_pow(st::SyntaxTree)
@@ -252,6 +287,37 @@ function _expand_literal_pow(st::SyntaxTree)
         st[1] st[2]
         [K"call" [K"call" "apply_type"::K"core" "Val"::K"top" st[3]]]
     ]
+end
+
+function _est_to_dst_ident(st::SyntaxTree)
+    s = st.name_val
+    if all(==('_'), s) || s == UNUSED
+        setattr!(mkleaf(st), :kind, K"Placeholder")
+    else
+        st
+    end
+end
+
+has_if_generated(st::SyntaxTree) = @stm st begin
+    (_, when=is_leaf(st)||is_quoted(st)) -> false
+    [K"function" _...] -> false
+    ([K"=" call _], when=is_eventually_call(call)) -> false
+    [K"->" _...] -> false
+    [K"if" [K"generated"] _ _] -> true
+    _ -> any(has_if_generated, children(st))
+end
+
+# The (if (generated) gen nongen) form is troublesome because everything
+# surrounding it is implicitly quoted (with `gen` interpolated into it), so
+# converting the function's AST before proper quoting is incorrect.
+split_generated(st::SyntaxTree, gen_part) = @stm st begin
+    (_, when=is_leaf(st)||is_quoted(st)) -> st
+    [K"if" [K"generated"] gen nongen] -> if gen_part
+        @ast(st._graph, st, [K"$" gen])
+    else
+        nongen
+    end
+    _ -> mapchildren(x->split_generated(x, gen_part), st._graph, st)
 end
 
 """
@@ -271,19 +337,11 @@ We can assume `st` has passed `valid_st1`.  Errors arising from invalid AST
 (including finding `macrocall/escape/quote` forms) should be handled there.
 """
 function est_to_dst(st::SyntaxTree)
-    g = st._graph
+    g = ensure_macro_attributes!(st._graph)
     rec = var"#self#"
 
     return @stm st begin
-        [K"Identifier"] -> let s = st.name_val
-            if s in ("ccall", "cglobal")
-                setattr!(newleaf(g, st, K"core"), :name_val, st.name_val)
-            elseif all(==('_'), s)
-                setattr!(mkleaf(st), :kind, K"Placeholder")
-            else
-                st
-            end
-        end
+        [K"Identifier"] -> _est_to_dst_ident(st)
         (_, when=is_leaf(st)) -> st
         ([K"unknown_head" l r],
          when=(s=st.name_val; Base.isoperator(s))) -> let
@@ -325,9 +383,6 @@ function est_to_dst(st::SyntaxTree)
                 [K"iteration"(st[1]) mapsyntax(_dst_eq_to_in, iters)...]
                 rec(body)
             ]
-        ([K"where" t tds...],
-         when=!(length(tds) === 1 && kind(tds[1]) === K"braces")) ->
-             @ast g st [K"where" rec(t) [K"braces" mapsyntax(rec, tds)...]]
         (_, when=(k = kind(st); k in KSet"tuple vect braces")) ->
             @ast g st [k _dst_sink_parameters(children(st))...]
         (_, when=(k = kind(st); k in KSet"curly ref")) ->
@@ -385,30 +440,35 @@ function est_to_dst(st::SyntaxTree)
             setattr!(out, :syntax_flags,
                      JS.flags(st) | JS.set_numeric_flags(dim.value))
         end
-        ([K"=" l r], when=(is_eventually_call(l))) -> if has_if_generated(r)
-            gen, nongen = split_generated(r, true), split_generated(r, false)
-            @ast g st [K"generated_function" rec(l) gen nongen]
-        else
-            @ast g st [K"function" rec(l) rec(r)]
-        end
-        [K"function" l r] -> let
-            if kind(l) === K"..."
-                l = @ast g l [K"tuple" l]
-            end
+        ([K"=" l r], when=(is_eventually_call(l))) -> let
             if has_if_generated(r)
                 gen, nongen = split_generated(r, true), split_generated(r, false)
-                @ast g st [K"generated_function" rec(l) gen nongen]
+                r2 = @ast g st [K"_generated_body" [K"quote" gen] rec(nongen)]
             else
-                @ast g st [K"function" rec(l) rec(r)]
+                r2 = rec(r)
             end
+            @ast g st [K"function" rec(l) r2]
         end
-        [K"do" [K"call" f args...] [K"->" do_args do_body]] -> let
-            # Note desugaring expects first-arg do-expression, unlike RawGreenNode
-            @ast g st [K"call"
-                rec(f)
-                @ast g st[end] [K"do" rec(do_args) rec(do_body)]
-                _dst_sink_parameters(args)...
-            ]
+        [K"function" l r] -> let l = _dst_fix_arglist(l)
+            if has_if_generated(r)
+                gen, nongen = split_generated(r, true), split_generated(r, false)
+                r2 = @ast g st [K"_generated_body" [K"quote" gen] rec(nongen)]
+            else
+                r2 = rec(r)
+            end
+            @ast g st [K"function" rec(l) r2]
+        end
+        [K"->" l r] -> let l = _dst_fix_arglist(l)
+            if has_if_generated(r)
+                gen, nongen = split_generated(r, true), split_generated(r, false)
+                r2 = @ast g st [K"_generated_body" [K"quote" gen] rec(nongen)]
+            else
+                r2 = rec(r)
+            end
+            @ast g st [K"->" rec(l) r2]
+        end
+        [K"do" [K"call" f args...] lam] -> let
+            @ast g st [K"call" rec(f) rec(lam) _dst_sink_parameters(args)...]
         end
         ([K"let" binds body], when=(kind(binds) !== K"block")) ->
             @ast g st [K"let" [K"block"(binds) rec(binds)] rec(body)]
