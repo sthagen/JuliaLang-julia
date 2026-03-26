@@ -140,7 +140,7 @@ function Base.showerror(io::IO, exc::MacroExpansionError)
             pos == :begin   ? (fb:fb-1) :
             pos == :end     ? (lb+1:lb) :
             error("Unknown position $pos")
-        highlight(io, src.file, byterange, note=exc.msg)
+        highlight(io, src.file[], byterange, note=exc.msg)
     end
     if !isnothing(exc.err)
         print(io, "\nCaused by:\n")
