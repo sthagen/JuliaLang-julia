@@ -771,6 +771,7 @@ JL_DLLEXPORT void jl_init_(jl_image_buf_t sysimage)
     jl_init_staticdata();
     jl_init_runtime_ccall();
     jl_init_tasks();
+    jl_init_engine();
     jl_init_threading();
     jl_init_threadinginfra();
     if (jl_options.handle_signals == JL_OPTIONS_HANDLE_SIGNALS_ON)
