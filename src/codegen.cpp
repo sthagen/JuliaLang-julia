@@ -1211,6 +1211,29 @@ static const auto jl_typeof_func = new JuliaFunction<>{
             {}); },
 };
 
+// `julia.blackbox` is an optimization barrier for GC-tracked pointer values.
+// It returns its argument unchanged, but is opaque to the optimizer: it cannot
+// be CSE'd, constant-folded, or treated as loop-invariant. Lowered to inline
+// asm after GC frame lowering (when the pointer is a raw non-tracked pointer).
+static const auto jl_blackbox_func = new JuliaFunction<>{
+    "julia.blackbox",
+    [](LLVMContext &C) {
+        auto T_prjlvalue = JuliaType::get_prjlvalue_ty(C);
+        return FunctionType::get(T_prjlvalue, {T_prjlvalue}, false);
+    },
+    [](LLVMContext &C) {
+        AttrBuilder FnAttrs(C);
+        FnAttrs.addMemoryAttr(MemoryEffects::none());
+        FnAttrs.addAttribute(Attribute::NoUnwind);
+        FnAttrs.addAttribute(Attribute::NoRecurse);
+        FnAttrs.addAttribute(Attribute::WillReturn);
+        FnAttrs.addAttribute(Attribute::NoSync);
+        return AttributeList::get(C,
+            AttributeSet::get(C, FnAttrs),
+            Attributes(C, {Attribute::NonNull}),
+            {}); },
+};
+
 static const auto jl_write_barrier_func = new JuliaFunction<>{
     "julia.write_barrier",
     [](LLVMContext &C) { return FunctionType::get(getVoidTy(C),
@@ -5257,7 +5280,40 @@ isdefined_unknown_idx:
 
     else if (f == BUILTIN(compilerbarrier) && (nargs == 2)) {
         emit_typecheck(ctx, argv[1], (jl_value_t*)jl_symbol_type, "compilerbarrier");
-        *ret = argv[2];
+        const jl_cgval_t &setting = argv[1];
+        if (setting.constant && setting.constant == (jl_value_t*)jl_symbol("blackbox")) {
+            const jl_cgval_t &obj = argv[2];
+            if (obj.V) {
+                Value *V = obj.V;
+                Type *Ty = V->getType();
+                if (obj.isboxed) {
+                    // Boxed GC-tracked pointer: emit julia.blackbox intrinsic,
+                    // lowered to inline asm after GC frame expansion.
+                    Function *BB = prepare_call(jl_blackbox_func);
+                    Value *result = ctx.builder.CreateCall(BB, {boxed(ctx, obj)});
+                    *ret = mark_julia_type(ctx, result, true, obj.typ);
+                } else if (Ty->isSingleValueType() && !Ty->isPointerTy()) {
+                    // Non-pointer scalar (int, float): fits in a register, use "=r,0".
+                    FunctionType *AsmFTy = FunctionType::get(Ty, {Ty}, false);
+                    InlineAsm *IA = InlineAsm::get(AsmFTy, "", "=r,0", /*hasSideEffects=*/false);
+                    Value *result = ctx.builder.CreateCall(AsmFTy, IA, {V});
+                    *ret = mark_julia_type(ctx, result, false, obj.typ);
+                } else {
+                    // Unboxed struct, or unboxed pointer (e.g. Ptr{T} passed
+                    // as addrspace(11)): clobber memory so LLVM can't assume
+                    // the value is invariant.
+                    FunctionType *VoidFTy = FunctionType::get(getVoidTy(ctx.builder.getContext()), false);
+                    InlineAsm *IA = InlineAsm::get(VoidFTy, "", "~{memory}", /*hasSideEffects=*/true);
+                    ctx.builder.CreateCall(VoidFTy, IA);
+                    *ret = obj;
+                }
+            } else {
+                // Ghost type (e.g. Nothing) — pass through
+                *ret = obj;
+            }
+        } else {
+            *ret = argv[2];
+        }
         return true;
     }
 
@@ -10435,14 +10491,17 @@ extern "C" void jl_init_llvm(void)
     if (clopt && clopt->getNumOccurrences() == 0)
         cl::ProvidePositionalOption(clopt, "4", 1);
 
-    // When the platform doesn't support __int128, compiler-rt/libgcc do not
-    // provide the corresponding libcalls (e.g. __floattidf, __fixdfti), so we
-    // must expand FP conversions for integer types wider than 64 bits inline.
-#ifndef _HAS_INT128_
+    // compiler-rt/libgcc only provide FP conversion libcalls (e.g. __floattidf,
+    // __fixdfti) up to the widest integer type the platform supports natively
+    // in C (_BitInt excluded). Wider FP conversions must be expanded inline.
     clopt = llvmopts.lookup("expand-fp-convert-bits");
-    if (clopt && clopt->getNumOccurrences() == 0)
+    if (clopt && clopt->getNumOccurrences() == 0) {
+#ifdef _HAS_INT128_
+        cl::ProvidePositionalOption(clopt, "128", 1);
+#else
         cl::ProvidePositionalOption(clopt, "64", 1);
 #endif
+    }
 
     clopt = llvmopts.lookup("time-passes");
     if (clopt && clopt->getNumOccurrences() > 0)
