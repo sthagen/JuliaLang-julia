@@ -343,7 +343,7 @@ to indicate that the "primary" location of the source is the location where
 macro ast(ctx, srcref, tree)
     quote
         ctx = $(esc(ctx))
-        srcref::$SyntaxTree = $(_match_srcref(srcref))
+        srcref = $(_match_srcref(srcref))::$SyntaxTree
         $(_expand_ast_tree(:ctx, :srcref, tree, QuoteNode(__source__)))
     end
 end

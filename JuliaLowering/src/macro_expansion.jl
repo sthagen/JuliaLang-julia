@@ -312,7 +312,7 @@ function expand_macro(ctx, ex)
             rethrow(newexc)
         end
         if expanded isa SyntaxTree
-            if !is_compatible_graph(ctx, expanded)
+            if expanded._graph !== ctx.graph
                 # If the macro has produced syntax outside the macro context,
                 # copy it over. TODO: Do we expect this always to happen?  What
                 # is the API for access to the macro expansion context?
@@ -386,7 +386,7 @@ function append_sourceref(ctx, ex, secondary_prov)
         if kind(ex) == K"macrocall"
             copy_node(ex)
         else
-            cs = map(e->append_sourceref(ctx, e, secondary_prov)._id, children(ex))
+            cs = mapsyntax(e->append_sourceref(ctx, e, secondary_prov)._id, children(ex))
             mknode(ex, cs)
         end
     else
@@ -474,13 +474,15 @@ function expand_forms_1(ctx::MacroExpansionContext, ex::SyntaxTree)
     end
 end
 
-ensure_macro_attributes!(graph) = ensure_attributes!(
-    graph;
-    var_id=IdTag,
-    scope_layer=LayerId,
-    __macro_ctx__=Nothing,
-    meta=CompileHints,
-    (DEBUG ? (:jl_source=>LineNumberNode,) : ())...)
+function ensure_macro_attributes!(graph)
+    g2 = ensure_attributes!(
+        graph;
+        var_id=IdTag,
+        scope_layer=LayerId,
+        __macro_ctx__=Nothing,
+        meta=CompileHints)
+    DEBUG ? ensure_attributes!(g2; jl_source=LineNumberNode) : g2
+end
 
 @fzone "JL: macroexpand" function expand_forms_1(mod::Module, ex::SyntaxTree, expr_compat_mode::Bool, macro_world::UInt)
     if kind(ex) == K"local"

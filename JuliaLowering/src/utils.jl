@@ -320,7 +320,7 @@ function _print_ir(io::IO, ex, indent)
 end
 
 # Wrap a function body in Base.Compiler.@zone for profiling
-if isdefined(Base.Compiler, Symbol("@zone"))
+if isdefined(Base.Compiler, Symbol("@zone")) && DEBUG
     macro fzone(str, f)
         @assert(f isa Expr && f.head === :function && length(f.args) === 2 && str isa String,
                 "usage: @fzone name_string <function expression>")

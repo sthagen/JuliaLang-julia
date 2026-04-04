@@ -659,7 +659,7 @@ vst1_simple_calldecl(vcx, st) = @stm st begin
 end
 
 vst1_macro(vcx, st) = @stm st begin
-    [K"macro" m] -> vst1_ident(vcx, m)
+    [K"macro" m] -> vst1_ident(vcx, m; lhs=true) | vst1_ident(vcx, m; lhs=false)
     [K"macro" [K"call" _ [K"parameters" _...] _...] _...] ->
         @fail(st[1][end], "macros cannot accept keyword arguments")
     [K"macro" [K"call" m ps...] body] ->
@@ -674,9 +674,11 @@ vst1_macro(vcx, st) = @stm st begin
     _ -> unknown()
 end
 
+# Macros may have either underscore or reserved (ccall, cglobal) names
 vst1_macro_calldecl_name(vcx, st) = @stm st begin
     [K"." _ _] -> vst1_calldecl_dot_name(vcx, st)
-    _ -> @fail(st, "invalid macro name") | vst1_ident(vcx, st; lhs=true)
+    m -> @fail(st, "invalid macro name") |
+        vst1_ident(vcx, m; lhs=true) | vst1_ident(vcx, m; lhs=false)
 end
 
 vst1_calldecl_name(vcx, st) = @stm st begin
@@ -880,7 +882,7 @@ end
 #
 # Note simple `op` and `.op` are calls to (dotted) identifiers, so this special
 # handling isn't necessary.
-vst1_dotted_or_op_assign(vcx, st) = let op_s = get(st, :name_val, "")
+vst1_dotted_or_op_assign(vcx, st) = let op_s = get(st, :name_val, "")::String
     @stm st begin
         [K".=" l r] -> vst1_dotassign_lhs(vcx, l) & vst1(vcx, r)
         (_, when=(!Base.isoperator(op_s))) -> unknown()

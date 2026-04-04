@@ -1928,7 +1928,7 @@ function expand_call(ctx, ex)
     if any(kind(arg) == K"..." for arg in args)
         # Splatting, eg, `f(a, xs..., b)`
         expand_splat(ctx, ex, expand_forms_2(ctx, farg), args)
-    elseif kind(farg) == K"Identifier" && farg.name_val == "include"
+    elseif kind(farg) == K"Identifier" && farg.name_val === "include"
         # world age special case
         r = ssavar(ctx, ex)
         @ast ctx ex [K"block"
@@ -1950,8 +1950,6 @@ end
 #-------------------------------------------------------------------------------
 
 function expand_dot(ctx, ex)
-    @jl_assert numchildren(ex) in (1,2)  (ex, "`.` form requires either one or two children")
-
     if numchildren(ex) == 1
         # eg, `f = .+`
         # Upstream TODO: Remove the (. +) representation and replace with use
@@ -1975,6 +1973,8 @@ function expand_dot(ctx, ex)
             ex[1]
             rhs
         ]
+    else
+        @jl_assert false (ex, "`.` form requires either one or two children")
     end
 end
 
@@ -2951,13 +2951,15 @@ function _make_macro_name(ctx, ex)
     k = kind(ex)
     if k == K"Identifier" || k == K"Symbol"
         name = setattr!(mkleaf(ex), :kind, k)
-        name.name_val = "@$(ex.name_val)"
-        name
+        setattr!(name, :name_val, "@$(ex.name_val)")
+    elseif k == K"Placeholder"
+        name = setattr!(mkleaf(ex), :kind, K"Identifier")
+        setattr!(name, :name_val, "@$(ex.name_val)")
     elseif is_valid_modref(ex)
         @jl_assert numchildren(ex) == 2 ex
         @ast ctx ex [K"." ex[1] _make_macro_name(ctx, ex[2])]
     else
-        throw(LoweringError(ex, "invalid macro name"))
+        @jl_assert false ex
     end
 end
 
@@ -3945,11 +3947,11 @@ function expand_wheres(ctx, ex)
     body = ex[1]
     @stm ex begin
         [K"where" _ [K"_typevars" [K"block" names...] [K"block" stmts...]]] ->
-            for n in reverse(names)
+            for n in Iterators.reverse(names)
                 body = @ast ctx ex [K"call" "UnionAll"::K"core" n body]
             end
         [K"where" _ tvs...] ->
-            for v in reverse(tvs)
+            for v in Iterators.reverse(tvs)
                 body = expand_where(ctx, ex, body, v)
             end
     end

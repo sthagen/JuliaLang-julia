@@ -30,9 +30,11 @@ function _get_inner_lnn(e::Expr, default::LineNumberNode)
     e.head in (:function, :macro, :module, :(=)) || return default
     length(e.args) >= 2 || return default
     b = e.args[end]
-    b isa Expr && b.head === :block || return default
-    length(b.args) >= 1 && b.args[1] isa LineNumberNode || return default
-    return b.args[1]
+    b isa Expr || return default
+    b.head === :block || return default
+    length(b.args) >= 1 || return default
+    b_lnn = b.args[1]
+    return b_lnn isa LineNumberNode ? b_lnn : default
 end
 
 # List of Expr-AST forms that are always converted to some SyntaxTree form and
@@ -59,7 +61,7 @@ function _expr_to_est(graph::SyntaxGraph, @nospecialize(e), src::LineNumberNode)
     elseif e isa Expr && e.head === :scope_layer
         @assert length(e.args) === 2 && e.args[1] isa Symbol
         ident = newleaf(graph, src, K"Identifier")
-        setattr!(ident, :name_val, String(e.args[1]))
+        setattr!(ident, :name_val, String(e.args[1]::Symbol))
         setattr!(ident, :scope_layer, e.args[2])
     elseif e isa Expr && e.head === :static_parameter
         setattr!(newleaf(graph, src, K"Value"), :value, e)
@@ -123,7 +125,7 @@ function est_to_expr(st::SyntaxTree, suppress_linenodes=false)
     return if k === K"core" && numchildren(st) === 0 && st.name_val === "nothing"
         nothing
     elseif kind(st) === K"Identifier"
-        n = Symbol(st.name_val)
+        n = Symbol(st.name_val::String)
         mod = get(st, :mod, nothing)
         !isnothing(mod) ? GlobalRef(mod, n) :
             hasattr(st, :scope_layer) ? Expr(:scope_layer, n, st.scope_layer) :
@@ -144,7 +146,7 @@ function est_to_expr(st::SyntaxTree, suppress_linenodes=false)
         @jl_assert !is_leaf(st) (st, "est_to_expr should only be used pre-desugaring")
         # In a partially-expanded or quoted AST, there may be heads with no
         # corresponding kind
-        head = Symbol(k === K"unknown_head" ? st.name_val : untokenize(k))
+        head = Symbol((k === K"unknown_head" ? st.name_val : untokenize(k))::String)
         out = Expr(head)
 
         # (Move the following assumptions to the docs if they turn out accurate)
@@ -163,22 +165,19 @@ function est_to_expr(st::SyntaxTree, suppress_linenodes=false)
             end
         end
         # Add extra linenodes to some blocks for better provenance
-        @stm st begin
-            ([K"block"], when=!suppress_linenodes) ->
-                push!(out.args, source_location(LineNumberNode, st))
-            [K"module" _... [K"block" _...]] ->
-                pushfirst!(out.args[end].args, source_location(LineNumberNode, st))
-            [K"function" _ [K"block" _...]] ->
-                pushfirst!(out.args[end].args, source_location(LineNumberNode, st))
-            [K"macro" _ [K"block" _...]] ->
-                pushfirst!(out.args[end].args, source_location(LineNumberNode, st))
-            [K"for" _ [K"block" _...]] ->
-                push!(out.args[end].args, source_location(
-                    LineNumberNode, sourcefile(st), last_byte(st)))
-            [K"while" _ [K"block" _...]] ->
-                push!(out.args[end].args, source_location(
-                    LineNumberNode, sourcefile(st), last_byte(st)))
-            _ -> nothing
+        if head === :block && length(out.args) == 0 && !suppress_linenodes
+            push!(out.args, source_location(LineNumberNode, st))
+        elseif head in (:module, :function, :macro) && length(out.args) > 0
+            let b = out.args[end]
+                b isa Expr && b.head === :block && pushfirst!(
+                    b.args, source_location(LineNumberNode, st))
+            end
+        elseif head in (:for, :while) && length(out.args) > 0
+            let b = out.args[end]
+                b isa Expr && b.head === :block && push!(
+                    b.args, source_location(
+                        LineNumberNode, sourcefile(st), last_byte(st)))
+            end
         end
         out
     end
@@ -190,8 +189,9 @@ end
 # .op => (. op)
 function _dst_separate_dotop(st::SyntaxTree)
     k = kind(st)
-    if k === K"Identifier" && is_dotted_operator(st.name_val)
-        dotop_s = st.name_val
+    if k === K"Identifier"
+        dotop_s = st.name_val::String
+        !is_dotted_operator(dotop_s) && return est_to_dst(st)
         op_s = dotop_s[nextind(dotop_s,1):end]
         op_leaf = setattr(mkleaf(st), :name_val, op_s)
         return @ast st._graph st [K"." op_leaf]
@@ -294,7 +294,7 @@ function _expand_literal_pow(st::SyntaxTree)
 end
 
 function _est_to_dst_ident(st::SyntaxTree)
-    s = st.name_val
+    s = st.name_val::String
     if all(==('_'), s) || s == UNUSED
         setattr!(mkleaf(st), :kind, K"Placeholder")
     else
@@ -477,7 +477,7 @@ function est_to_dst(st::SyntaxTree)
         ([K"let" binds body], when=(kind(binds) !== K"block")) ->
             @ast g st [K"let" [K"block"(binds) rec(binds)] rec(body)]
         [K"struct" mut sig body] -> let
-            flags = JS.flags(st) | (_is_false(mut) ? 0 : JS.MUTABLE_FLAG)
+            flags = JS.flags(st) | (_is_false(mut) ? 0x0000 : JS.MUTABLE_FLAG)
             @ast g st [K"struct"(syntax_flags=flags)
                 rec(sig)
                 rec(body)
@@ -512,7 +512,7 @@ function est_to_dst(st::SyntaxTree)
                 @ast g st [K"meta" s=>K"Symbol"]
             elseif length(vs) === 1
                 out = est_to_dst(vs[1])
-                setmeta(out, Symbol(s), true)
+                setmeta(out, Symbol(s.name_val), true)
             else
                 # Kick the can down the road (should only be simple atoms?)
                 out_cs = SyntaxList(g)
