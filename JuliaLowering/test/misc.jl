@@ -1,5 +1,3 @@
-@testset "Miscellaneous" begin
-
 test_mod = Module()
 
 # Blocks
@@ -263,6 +261,58 @@ end
     @test lower_str(Main, "x + y").args[1].has_image_globalref === true
 end
 
+baremodule baremod
+macro int128_str(x);  error("baremod macro; expected call to Core macro"); end
+macro uint128_str(x); error("baremod macro; expected call to Core macro"); end
+macro big_str(x);     error("baremod macro; expected call to Core macro"); end
+macro cmd(x);         error("baremod macro; expected call to Core macro"); end
+macro doc(x, y);      error("baremod macro; expected call to Core macro"); end
+global nothing = "baremod.nothing; expected core nothing"
+end
+@testset "globalrefs inserted by parsing" begin
+    local jl_s_eval = x->JuliaLowering.include_string(baremod, x; expr_compat_mode=true)
+    local fl_s_eval = x->fl_eval(baremod, JuliaSyntax.parsestmt(Expr, x; filename="file"))
+
+    let s = "100000000000000000000000000000"
+        @test jl_s_eval(s) == fl_s_eval(s)
+    end
+    let s = "0x100000000000000000000000000000"
+        @test jl_s_eval(s) == fl_s_eval(s)
+    end
+    let s = "10000000000000000000000000000000000000000000000000000000000000000"
+        @test jl_s_eval(s) == fl_s_eval(s)
+    end
+    let s = "`ls`"
+        @test jl_s_eval(s) == fl_s_eval(s)
+    end
+
+    let s = """
+            "foo" function fl_documented_function(); fl_documented_function; end
+            """
+        @test fl_s_eval(s) isa Function
+    end
+    @test baremod.fl_documented_function() == baremod.fl_documented_function
+    let s = """
+            "foo" function jl_documented_function(); jl_documented_function; end
+            """
+        @test jl_s_eval(s) isa Function
+    end
+    @test baremod.jl_documented_function() == baremod.jl_documented_function
+
+    let s = """
+            function fl_ret_nothing(); return; end
+            """
+        @test fl_s_eval(s) isa Function
+    end
+    @test baremod.fl_ret_nothing() == Core.nothing
+    let s = """
+            function jl_ret_nothing(); return; end
+            """
+        @test fl_s_eval(s) isa Function
+    end
+    @test baremod.jl_ret_nothing() == Core.nothing
+end
+
 @testset "docstrings: doc-only expressions" begin
     local jeval(mod, str) = JuliaLowering.include_string(mod, str; expr_compat_mode=true)
     jeval(test_mod, "function fun_exists(x); x; end")
@@ -445,6 +495,4 @@ end
             nothing
         end
     end
-end
-
 end
