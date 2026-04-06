@@ -374,7 +374,8 @@ end
 27  TestMod.X
 28  SourceLocation::1:1
 29  (call top._defaultctors %₂₇ %₂₈)
-30  (return core.nothing)
+30  latestworld
+31  (return core.nothing)
 
 ########################################
 # Empty struct with empty ctor
@@ -460,7 +461,8 @@ end
 28  TestMod.X
 29  SourceLocation::1:1
 30  (call top._defaultctors %₂₈ %₂₉)
-31  (return core.nothing)
+31  latestworld
+32  (return core.nothing)
 
 ########################################
 # Struct with supertype and type params
@@ -513,7 +515,8 @@ end
 44  TestMod.X
 45  SourceLocation::1:1
 46  (call top._defaultctors %₄₄ %₄₅)
-47  (return core.nothing)
+47  latestworld
+48  (return core.nothing)
 
 ########################################
 # Struct with const and atomic fields
@@ -552,7 +555,8 @@ end
 27  TestMod.X
 28  SourceLocation::1:1
 29  (call top._defaultctors %₂₇ %₂₈)
-30  (return core.nothing)
+30  latestworld
+31  (return core.nothing)
 
 ########################################
 # Documented struct
@@ -596,23 +600,24 @@ end
 28  TestMod.X
 29  SourceLocation:none:1:0
 30  (call top._defaultctors %₂₈ %₂₉)
-31  (= slot₁/val core.nothing)
-32  (call JuliaLowering.interpolate_ast SyntaxTree (inert_syntaxtree X))
-33  (call Base.Docs.Binding TestMod %₃₂)
-34  (call Core.svec "X docs\n")
-35  (call JuliaLowering.interpolate_ast SyntaxTree (inert_syntaxtree a))
-36  (call Pair{Symbol, Any} %₃₅ "field a docs")
-37  (call JuliaLowering.interpolate_ast SyntaxTree (inert_syntaxtree b))
-38  (call Pair{Symbol, Any} %₃₇ "field b docs")
-39  (call Dict{Symbol, Any} %₃₆ %₃₈)
-40  (call Pair :fields %₃₉)
-41  (call Dict{Symbol, Any} :path => "none" :linenumber => 1 :module => TestMod %₄₀)
-42  (call Base.Docs.docstr %₃₄ %₄₁)
-43  TestMod.Union
-44  (call core.apply_type %₄₃)
-45  (call Base.Docs.doc! TestMod %₃₃ %₄₂ %₄₄)
-46  slot₁/val
-47  (return %₄₆)
+31  latestworld
+32  (= slot₁/val core.nothing)
+33  (call JuliaLowering.interpolate_ast SyntaxTree (inert_syntaxtree X))
+34  (call Base.Docs.Binding TestMod %₃₃)
+35  (call Core.svec "X docs\n")
+36  (call JuliaLowering.interpolate_ast SyntaxTree (inert_syntaxtree a))
+37  (call Pair{Symbol, Any} %₃₆ "field a docs")
+38  (call JuliaLowering.interpolate_ast SyntaxTree (inert_syntaxtree b))
+39  (call Pair{Symbol, Any} %₃₈ "field b docs")
+40  (call Dict{Symbol, Any} %₃₇ %₃₉)
+41  (call Pair :fields %₄₀)
+42  (call Dict{Symbol, Any} :path => "none" :linenumber => 1 :module => TestMod %₄₁)
+43  (call Base.Docs.docstr %₃₅ %₄₂)
+44  TestMod.Union
+45  (call core.apply_type %₄₄)
+46  (call Base.Docs.doc! TestMod %₃₄ %₄₃ %₄₅)
+47  slot₁/val
+48  (return %₄₇)
 
 ########################################
 # Struct with outer constructor
@@ -657,7 +662,8 @@ end
 35  TestMod.X
 36  SourceLocation::1:1
 37  (call top._defaultctors %₃₅ %₃₆)
-38  (return core.nothing)
+38  latestworld
+39  (return core.nothing)
 
 ########################################
 # Struct with outer constructor where one typevar is constrained by the other
@@ -715,7 +721,8 @@ end
 47  TestMod.X
 48  SourceLocation::1:1
 49  (call top._defaultctors %₄₇ %₄₈)
-50  (return core.nothing)
+50  latestworld
+51  (return core.nothing)
 
 ########################################
 # User defined inner constructors and helper functions for structs without type params

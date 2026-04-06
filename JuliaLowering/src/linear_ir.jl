@@ -410,7 +410,8 @@ end
 
 function emit_latestworld(ctx, srcref)
     (isempty(ctx.code) || kind(last(ctx.code)) != K"latestworld") &&
-        emit(ctx, newleaf(ctx, srcref, K"latestworld"))
+        emit(ctx, kind(srcref) === K"latestworld" ? srcref :
+        newleaf(ctx, srcref, K"latestworld"))
 end
 
 function compile_condition_term(ctx, ex)

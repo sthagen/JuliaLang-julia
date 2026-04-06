@@ -3900,10 +3900,13 @@ function expand_struct_def(ctx, ex, docs)
 
         if isempty(inner_defs)
             # Default constructors are generated at runtime by Base._defaultctors.
-            [K"call"
-                "_defaultctors"::K"top"
-                global_struct_name
-                ::K"SourceLocation"(ex)
+            [K"block"
+                [K"call"
+                    "_defaultctors"::K"top"
+                    global_struct_name
+                    ::K"SourceLocation"(ex)
+                ]
+                (::K"latestworld")
             ]
         else
             # User-defined inner constructors are placed in a separate scope_block

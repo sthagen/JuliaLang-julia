@@ -470,6 +470,46 @@ emptyblock_result = JuliaLowering.eval(test_mod, Expr(:(=), :emptyblock_144, Exp
     """) == `cmdstrinnerstr123`
 end
 
+let op_mod = Module(:opmod, false)
+    @testset "operators" for run in [
+            s->fl_eval(op_mod, JuliaSyntax.parseall(Expr, s)),
+            s->JuliaLowering.include_string(op_mod, s; expr_compat_mode=true),
+            s->JuliaLowering.include_string(op_mod, s; expr_compat_mode=false)]
+
+        @testset "unary prefix (no parens needed)" for op in String["⋆", "±", "∓", "~", "!", "¬", "√", "∛", "∜"]
+            @test run("$(op)x = (x,)") isa Function
+            Core.@latestworld
+            @test run(op) isa Function
+            @test run("$(op)1") == (1,)
+            @test run("""
+                let $(op)x = (x,x)
+                    $(op)1
+                end """) == (1,1)
+        end
+        @testset "prefix" for op in String["..", "+", "-", "⋆", "±", "∓", "~", "!", "¬", "√", "∛", "∜"]
+            @test run("$op(a,b,c) = 3") isa Function
+            Core.@latestworld
+            @test run(op) isa Function
+            @test run("$op(1,2,3)") == 3
+            @test run("""
+                let $op(a,b,c) = (c,b,a)
+                    $op(1,2,3)
+                end """) == (3,2,1)
+        end
+        @testset "infix" for op in String["&", "|", "+", "-", ":", ".."]
+            @test run("a$(op)b = (a,b)") isa Function
+            Core.@latestworld
+            @test run(op) isa Function
+            @test run("var\"$op\"(1,2)") == (1,2)
+            @test run("1$(op)2") == (1,2)
+            @test run("""
+                let a$(op)b = (b,a)
+                    1$(op)2
+                end """) == (2,1)
+        end
+    end
+end
+
 @testset "jl_assert" begin
     st = @ast_ [K"function" "foo"::K"Identifier"]
     if JL.DEBUG

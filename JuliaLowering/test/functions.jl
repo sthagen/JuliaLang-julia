@@ -1056,9 +1056,38 @@ end
 @testset "first arg `where`" begin
     @eval test_mod struct A12238{T} end
     Core.@latestworld
-    @test_broken JL.include_string(test_mod, "(A12238{T} where T<:Real)(x) = 0") === nothing
-    @test_broken test_mod.A12238{<:Real}(0) == 0
-    # @test_throws MethodError test_mod.A12238{<:Integer}(0)
+    @test JL.include_string(test_mod, "(A12238{T} where T<:Real)(x) = 0") === nothing
+    @test test_mod.A12238{<:Real}(0) == 0
+    @test_throws MethodError test_mod.A12238{<:Integer}(0)
+
+    # Nested where
+    @eval test_mod struct A12238_2{T, U}; x::T; y::U; end
+    Core.@latestworld
+    @test JL.include_string(
+        test_mod,
+        "(A12238_2{T, U} where T<:U where U<:Real)(x) = A12238_2(x,x)") === nothing
+    @test (test_mod.A12238_2{T, U} where {U<:Real, T<:U})(0) ===
+        test_mod.A12238_2{Int, Int}(0, 0)
+
+    # Implicit whereparams
+    @eval test_mod struct A12238_3{T, U}; x::T; y::U; end
+    Core.@latestworld
+    @test JL.include_string(
+        test_mod,
+        "(A12238_3{<:Real, <:AbstractVector{<:Real}})() = A12238_3(1,Int[1])") === nothing
+    @test (test_mod.A12238_3{<:Real, <:AbstractVector{<:Real}})() isa
+        test_mod.A12238_3{Int, Vector{Int}}
+    @test (test_mod.A12238_3{<:Real, <:AbstractVector{<:Real}})().x == 1
+    @test (test_mod.A12238_3{<:Real, <:AbstractVector{<:Real}})().y == [1]
+
+    # >:
+    @eval test_mod struct A12238_4{T} end
+    Core.@latestworld
+    @test JL.include_string(
+        test_mod,
+        "(A12238_4{T} where T>:Int)(x) = x") === nothing
+    @test test_mod.A12238_4{>:Int}(1) == 1
+    @test_throws MethodError test_mod.A12238_4{<:Int}(1)
 end
 
 @testset "Write-only placeholder function arguments" begin
