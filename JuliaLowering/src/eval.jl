@@ -220,6 +220,7 @@ function to_code_info(ex::SyntaxTree, slots::Vector{Slot}, meta::CompileHints)
     slotnames = Vector{Symbol}(undef, length(slots))
     slot_rename_inds = Dict{String,Int}()
     slotflags = Vector{UInt8}(undef, length(slots))
+    nospecialize_slots = Core.SlotNumber[]
     for (i, slot) in enumerate(slots)
         name = slot.name
         # TODO: Do we actually want unique names here? The C code in
@@ -241,9 +242,16 @@ function to_code_info(ex::SyntaxTree, slots::Vector{Slot}, meta::CompileHints)
             slot.is_called        << 6   # SLOT_CALLED        | -
         if slot.is_nospecialize
             # Ideally this should be a slot flag instead
-            add_ir_debug_info!(current_codelocs_stack, ex)
-            push!(stmts, Expr(:meta, :nospecialize, Core.SlotNumber(i)))
+            i > nargs && throw(LoweringError(
+                ex, "@nospecialize annotation applied to a non-argument"))
+            push!(nospecialize_slots, Core.SlotNumber(i))
         end
+    end
+    if !isempty(nospecialize_slots)
+        add_ir_debug_info!(current_codelocs_stack, ex)
+        length(nospecialize_slots) == nargs - 1 ? # all args but self
+            push!(stmts, Expr(:meta, :nospecialize)) :
+            push!(stmts, Expr(:meta, :nospecialize, nospecialize_slots...))
     end
 
     stmt_offset = length(stmts)
