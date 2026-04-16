@@ -1723,14 +1723,14 @@ static void jl_write_values(jl_serializer_state *s) JL_GC_DISABLED
                     size_t nf = dt->layout->nfields;
                     size_t np = dt->layout->npointers;
                     size_t fieldsize = 0;
-                    uint8_t is_foreign_type = dt->layout->flags.fielddesc_type == 3;
+                    uint8_t is_foreign_type = dt->layout->flags.fielddesc_type == JL_FIELDDESC_FOREIGN;
                     if (!is_foreign_type) {
                         fieldsize = jl_fielddesc_size(dt->layout->flags.fielddesc_type);
                     }
                     char *flddesc = (char*)dt->layout;
                     size_t fldsize = sizeof(jl_datatype_layout_t) + nf * fieldsize;
                     if (!is_foreign_type && dt->layout->first_ptr != -1)
-                        fldsize += np << dt->layout->flags.fielddesc_type;
+                        fldsize += np * jl_fielddesc_ptr_size(dt->layout->flags.fielddesc_type);
                     uintptr_t layout = LLT_ALIGN(ios_pos(s->const_data), sizeof(void*));
                     write_padding(s->const_data, layout - ios_pos(s->const_data)); // realign stream
                     newdt->layout = NULL; // relocation offset
@@ -4408,7 +4408,7 @@ JL_DLLEXPORT void jl_restore_system_image(jl_image_t *image, jl_image_buf_t buf)
         return;
 
     if (buf.kind == JL_IMAGE_KIND_SO)
-        assert(image->fptrs.ptrs); // jl_init_processor_sysimg should already be run
+        assert(image->fptrs.ptrs); // jl_load_sysimg should already be run
 
     JL_SIGATOMIC_BEGIN();
     ios_static_buffer(&f, (char *)buf.data, buf.size);
@@ -4439,7 +4439,7 @@ JL_DLLEXPORT jl_value_t *jl_restore_package_image_from_file(const char *fname, j
     jl_gc_notify_image_load(buf.data, buf.size);
 
     // Despite the name, this function actually parses the pkgimage
-    jl_image_t pkgimage = jl_init_processor_pkgimg(buf);
+    jl_image_t pkgimage = jl_load_pkgimg(buf);
 
     if (ignore_native) {
         // Must disable using native code in possible downstream users of this code:
