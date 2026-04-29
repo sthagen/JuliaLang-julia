@@ -531,7 +531,7 @@ end
 function close(t::Union{FileMonitor, FolderMonitor})
     iolock_begin()
     handle = @atomic :monotonic t.handle
-    if handle != C_NULL
+    if handle != C_NULL && ccall(:uv_is_closing, Cint, (Ptr{Cvoid},), handle) == 0
         ccall(:jl_close_uv, Cvoid, (Ptr{Cvoid},), handle)
     end
     iolock_end()
