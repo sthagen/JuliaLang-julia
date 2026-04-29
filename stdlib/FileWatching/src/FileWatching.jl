@@ -805,7 +805,7 @@ function poll_fd(s::Union{RawFD, Sys.iswindows() ? WindowsRawSocket : Union{}}, 
     fdw = _FDWatcher(s, mask)
     local timer
     # we need this flag to explicitly track whether we call `close` already, to update the internal refcount correctly
-    timedout = Ref(false) # TODO: make this atomic
+    timedout = Threads.Atomic{Bool}(false)
     try
         if timeout_s >= 0
             # delay creating the timer until shortly before we start the poll wait
