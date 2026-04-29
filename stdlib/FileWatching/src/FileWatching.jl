@@ -171,8 +171,12 @@ function uv_fspollcb(req::Ptr{Cvoid})
                             uv_jl_fspollcb = @cfunction(uv_fspollcb, Cvoid, (Ptr{Cvoid},))
                             err = ccall(:uv_fs_stat, Cint, (Ptr{Cvoid}, Ptr{Cvoid}, Cstring, Ptr{Cvoid}),
                                 eventloop(), pfw.stat_req, pfw.file, uv_jl_fspollcb::Ptr{Cvoid})
-                            err == 0 || notify(pfw.notify, _UVError("PollingFileWatcher (start)", err), error=true) # likely just ENOMEM
-                            pfw.active = true
+                            if err == 0
+                                pfw.active = true
+                            else
+                                unpreserve_handle(pfw)
+                                notify(pfw.notify, _UVError("PollingFileWatcher (start)", err), error=true) # likely just ENOMEM
+                            end
                         end
                     end
                 finally
