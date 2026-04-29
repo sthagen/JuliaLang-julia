@@ -530,7 +530,7 @@ end
 
 function close(t::Union{FileMonitor, FolderMonitor})
     iolock_begin()
-    handle = t.handle
+    handle = @atomic :monotonic t.handle
     if handle != C_NULL
         ccall(:jl_close_uv, Cvoid, (Ptr{Cvoid},), handle)
     end
@@ -581,8 +581,8 @@ function _uv_hook_close(uv::FolderMonitor)
     nothing
 end
 
-isopen(fm::FileMonitor) = fm.handle != C_NULL
-isopen(fm::FolderMonitor) = fm.handle != C_NULL
+isopen(fm::FileMonitor) = (@atomic :monotonic fm.handle) != C_NULL
+isopen(fm::FolderMonitor) = (@atomic :monotonic fm.handle) != C_NULL
 isopen(pfw::PollingFileWatcher) = !pfw.closed
 isopen(pfw::_FDWatcher) = pfw.refcount != (0, 0)
 isopen(pfw::FDWatcher) = !pfw.mask.timedout
@@ -745,12 +745,12 @@ function wait(pfw::PollingFileWatcher)
 end
 
 function wait(m::FileMonitor)
-    m.handle == C_NULL && throw(EOFError())
+    (@atomic :monotonic m.handle) == C_NULL && throw(EOFError())
     preserve_handle(m)
     lock(m.notify)
     try
         while true
-            m.handle == C_NULL && throw(EOFError())
+            (@atomic :monotonic m.handle) == C_NULL && throw(EOFError())
             events = @atomicswap :not_atomic m.events = 0
             events == 0 || return FileEvent(events)
             if m.ioerrno != 0
@@ -765,11 +765,11 @@ function wait(m::FileMonitor)
 end
 
 function wait(m::FolderMonitor)
-    m.handle == C_NULL && throw(EOFError())
+    (@atomic :monotonic m.handle) == C_NULL && throw(EOFError())
     preserve_handle(m)
     lock(m.notify)
     evt = try
-            m.handle == C_NULL && throw(EOFError())
+            (@atomic :monotonic m.handle) == C_NULL && throw(EOFError())
             while isempty(m.channel)
                 wait(m.notify)
             end
@@ -927,11 +927,11 @@ function watch_folder(s::String, timeout_s::Real=-1)
         end
     end
     # inline a copy of `wait` with added support for checking timer
-    fm.handle == C_NULL && throw(EOFError())
+    (@atomic :monotonic fm.handle) == C_NULL && throw(EOFError())
     preserve_handle(fm)
     lock(fm.notify)
     evt = try
-            fm.handle == C_NULL && throw(EOFError())
+            (@atomic :monotonic fm.handle) == C_NULL && throw(EOFError())
             while isempty(fm.channel)
                 if @isdefined(timer)
                     isopen(timer) || return "" => FileEvent() # timeout
