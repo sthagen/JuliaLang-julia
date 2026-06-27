@@ -1282,7 +1282,7 @@ CFI_NORETURN
         }
 skip_pop_exception:;
     }
-    jl_gc_write(ct, ct->result, res);
+    jl_gc_write(ct, ct->result, jl_value_t, res);
     jl_finish_task(ct);
     jl_gc_debug_fprint_critical_error(ios_safe_stderr);
     abort();

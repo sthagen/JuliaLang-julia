@@ -1309,18 +1309,19 @@ STATIC_INLINE jl_value_t *jl_genericmemory_owner(jl_genericmemory_t *m JL_PROPAG
 
 // Utility for doing a basic write with the appropriate write barrier.
 // `parent` is the GC-tracked owner, `field` is an lvalue (e.g. obj->member),
-// and `val` is the new value to store. The barrier is emitted *before* the
-// store and receives the new value being stored.
-#define jl_gc_write(parent, field, val) do { \
-    void *_jl_write_val = (void*)(val); \
+// `type` is the pointed-to type of `field` (e.g. `jl_value_t` for a
+// `jl_value_t *` field), and `val` is the new value to store.
+#define jl_gc_write(parent, field, type, val) do { \
+    type *_jl_write_val = (val); \
     jl_gc_wb((parent), _jl_write_val); \
-    (field) = (__typeof__(field))_jl_write_val; \
+    (field) = _jl_write_val; \
 } while (0)
 
-// Atomic variant: `field` must be an _Atomic lvalue, `order` is relaxed or release.
-#define jl_gc_write_atomic(parent, field, val, order) do { \
-    __typeof__(jl_atomic_load_relaxed(&(field))) _jl_write_val = (__typeof__(jl_atomic_load_relaxed(&(field))))(val); \
-    jl_gc_wb((parent), (const void *)_jl_write_val); \
+// Atomic variant: `field` must be an _Atomic lvalue holding a `type *`, and
+// `order` is relaxed or release.
+#define jl_gc_write_atomic(parent, field, type, val, order) do { \
+    type *_jl_write_val = (val); \
+    jl_gc_wb((parent), _jl_write_val); \
     jl_atomic_store_##order(&(field), _jl_write_val); \
 } while (0)
 
@@ -1377,7 +1378,7 @@ STATIC_INLINE jl_value_t *jl_genericmemory_ptr_set(
     jl_genericmemory_t *m_ = (jl_genericmemory_t*)m;
     assert(((jl_datatype_t*)jl_typetagof(m_))->layout->flags.arrayelem_isboxed);
     assert(i < m_->length);
-    jl_gc_write_atomic(m, ((_Atomic(jl_value_t*)*)(m_->ptr))[i], (jl_value_t*)x, release);
+    jl_gc_write_atomic(m, ((_Atomic(jl_value_t*)*)(m_->ptr))[i], jl_value_t, (jl_value_t*)x, release);
     return (jl_value_t*)x;
 }
 #endif
@@ -1422,7 +1423,7 @@ STATIC_INLINE jl_value_t *jl_array_ptr_set(
 {
     assert(((jl_datatype_t*)jl_typetagof(((jl_array_t*)a)->ref.mem))->layout->flags.arrayelem_isboxed);
     assert(i < jl_array_len(a));
-    jl_gc_write_atomic(jl_array_owner((jl_array_t*)a), jl_array_data(a, _Atomic(jl_value_t*))[i], (jl_value_t*)x, release);
+    jl_gc_write_atomic(jl_array_owner((jl_array_t*)a), jl_array_data(a, _Atomic(jl_value_t*))[i], jl_value_t, (jl_value_t*)x, release);
     return (jl_value_t*)x;
 }
 #endif
