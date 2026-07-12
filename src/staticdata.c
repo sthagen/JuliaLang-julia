@@ -586,6 +586,27 @@ static void jl_insert_into_serialization_queue(jl_serializer_state *s, jl_value_
             // prevent this from happening, so we do not need to detect that user
             // error now.
         }
+        else if (jl_options.trim) {
+            // Rebuild the `mi->cache` list with any non-:trim-owned CodeInstances removed.
+            jl_code_instance_t *first = NULL;
+            jl_code_instance_t *prev = NULL;
+            jl_code_instance_t *codeinst = jl_atomic_load_relaxed(&mi->cache);
+            while (codeinst) {
+                jl_code_instance_t *next = jl_atomic_load_relaxed(&codeinst->next);
+                if (codeinst->owner == (jl_value_t *)jl_trim_sym) {
+                    record_field_change((jl_value_t**)&codeinst->owner, jl_nothing);
+                    if (prev == NULL)
+                        first = codeinst;
+                    else
+                        record_field_change((jl_value_t**)&prev->next, (jl_value_t*)codeinst);
+                    prev = codeinst;
+                }
+                codeinst = next;
+            }
+            if (prev != NULL)
+                record_field_change((jl_value_t**)&prev->next, NULL);
+            record_field_change((jl_value_t**)&mi->cache, (jl_value_t*)first);
+        }
         // don't recurse into all backedges memory (yet)
         jl_value_t *backedges = get_replaceable_field((jl_value_t**)&mi->backedges, 1);
         if (backedges) {
@@ -712,7 +733,7 @@ static void jl_insert_into_serialization_queue(jl_serializer_state *s, jl_value_
                 }
                 else if (may_discard_trees &&
                          native_functions && // don't delete any code if making a ji file
-                         (ci->owner == jl_nothing) && // don't delete code for external interpreters
+                         (ci->owner == jl_nothing || ci->owner == (jl_value_t*)jl_trim_sym) && // don't delete code for external interpreters
                          !effects_foldable(jl_atomic_load_relaxed(&ci->ipo_purity_bits)) && // don't delete code we may want for irinterp
                          jl_ir_inlining_cost(inferred) == UINT16_MAX) { // don't delete inlineable code
                     // delete the code now: if we thought it was worth keeping, it would have been converted to object code
@@ -1033,7 +1054,7 @@ static uintptr_t add_external_linkage(jl_serializer_state *s, jl_value_t *v, jl_
 // but symbols, small integers, and a couple of special items (`nothing` and the root Task)
 // have special handling.
 #define backref_id(s, v, link_ids) _backref_id(s, (jl_value_t*)(v), link_ids)
-static uintptr_t _backref_id(jl_serializer_state *s, jl_value_t *v, jl_array_t *link_ids) JL_GC_DISABLED
+static uintptr_t _backref_id(jl_serializer_state *s, jl_value_t *v, jl_array_t *link_ids) JL_GC_DISABLED JL_NOTSAFEPOINT
 {
     assert(v != NULL && "cannot get backref to NULL object");
     if (jl_is_symbol(v)) {
@@ -1917,7 +1938,10 @@ static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t bas
     case SymbolRef:
         assert(offset < deser_sym.len && deser_sym.items[offset] && "corrupt relocation item id");
         return (uintptr_t)deser_sym.items[offset];
-    case TagRef:
+    case TagRef: {
+        // for the purpose of this function, we only access boxes we know are perm-alloc
+        jl_value_t *jl_box_int64(int64_t) JL_NOTSAFEPOINT;
+        jl_value_t *jl_box_int32(int32_t) JL_NOTSAFEPOINT;
         if (offset == 0)
             return (uintptr_t)s->ptls->root_task;
         if (offset == 1)
@@ -1934,6 +1958,7 @@ static inline uintptr_t get_item_for_reloc(jl_serializer_state *s, uintptr_t bas
         // offset -= 256;
         assert(0 && "corrupt relocation item id");
         jl_unreachable(); // terminate control flow if assertion is disabled.
+    }
     case FunctionRef: {
         if (offset & BuiltinFunctionTag) {
             offset &= ~BuiltinFunctionTag;
@@ -2385,9 +2410,6 @@ static void jl_prune_binding_backedges(jl_array_t *backedges)
     jl_array_del_end(backedges, n - ins);
 }
 
-uint_t bindingkey_hash(size_t idx, jl_value_t *data);
-uint_t speccache_hash(size_t idx, jl_value_t *data);
-
 static void jl_prune_idset(_Atomic(jl_svec_t*) *pkeys, _Atomic(jl_genericmemory_t*) *pkeyset, uint_t (*key_hash)(size_t, jl_value_t*), jl_value_t *parent) JL_GC_DISABLED
 {
     jl_svec_t *keys = jl_atomic_load_relaxed(pkeys);
@@ -2732,7 +2754,7 @@ JL_DLLEXPORT jl_value_t *jl_as_global_root(jl_value_t *val, int insert)
     if (jl_is_globally_rooted(val))
         return val;
     jl_value_t *tw = extract_wrapper(val);
-    if (tw && (val == tw || jl_types_egal(val, tw)))
+    if (tw && (val == tw || jl_types_struct_equiv(val, tw)))
         return tw;
     if (jl_is_uint8(val))
         return jl_box_uint8(jl_unbox_uint8(val));
@@ -3566,9 +3588,6 @@ JL_DLLEXPORT jl_image_buf_t jl_set_sysimg_so(void *handle)
 //     return jl_subtype((jl_value_t*)a, (jl_value_t*)b) && jl_subtype((jl_value_t*)b, (jl_value_t*)a);
 // }
 #endif
-
-extern void export_jl_small_typeof(void);
-extern void export_jl_sysimg_globals(void);
 
 // When an image is loaded with ignore_native, all subsequent image loads must ignore
 // native code in the cache-file since we can't gurantuee that there are no call edges

@@ -326,7 +326,7 @@ JL_DLLEXPORT void jl_resolve_definition_effects_in_ir(jl_array_t *stmts, jl_modu
     }
 }
 
-jl_value_t *expr_arg1(jl_value_t *expr) {
+static jl_value_t *expr_arg1(jl_value_t *expr) {
     jl_array_t *args = ((jl_expr_t*)expr)->args;
     return jl_array_ptr_ref(args, 0);
 }
@@ -404,7 +404,7 @@ static void add_edge(arraylist_t *edges_list, arraylist_t *inlinestack, int32_t 
     *p_pc = (i - 2) / 3 + 1;
 }
 
-jl_debuginfo_t *jl_linetable_to_debuginfo(jl_array_t *codelocs_any, jl_array_t *linetable)
+static jl_debuginfo_t *jl_linetable_to_debuginfo(jl_array_t *codelocs_any, jl_array_t *linetable)
 {
     size_t nlocs = jl_array_nrows(codelocs_any);
     jl_value_t *toplocinfo = jl_array_ptr_ref(linetable, 0);
@@ -724,6 +724,14 @@ static jl_value_t *jl_call_staged(jl_method_t *def, jl_value_t *generator,
     gargs[0] = jl_box_ulong(world);
     gargs[1] = (jl_value_t*)def;
     memcpy(&gargs[2], jl_svec_data(sparam_vals), n_sparams * sizeof(void*));
+    // Generators receive the sparam values; a pinned env uncertainty marker is
+    // defined up to type equality and reads as its `==`-representative
+    // (genuinely undefined sparams still pass their marker through).
+    for (size_t i = 0; i < n_sparams; i++) {
+        jl_value_t *v = jl_sparam_defined_value(gargs[2 + i]);
+        if (v != NULL)
+            gargs[2 + i] = v;
+    }
     memcpy(&gargs[2 + n_sparams], args, (def->nargs - def->isva) * sizeof(void*));
     if (def->isva)
         gargs[totargs - 1] = jl_f_tuple(NULL, &args[def->nargs - 1], nargs - def->nargs + 1);

@@ -34,6 +34,7 @@
 #include "julia_internal.h"
 #include "platform.h"
 #include "llvm-codegen-shared.h"
+#include "objcache.h"
 #include <stack>
 #include <queue>
 #include <tuple>
@@ -150,6 +151,7 @@ inline void add_fn_attrs_for_effects(CallInst *CI, uint32_t effects) JL_NOTSAFEP
 struct OptimizationOptions {
     bool lower_intrinsics;
     bool dump_native;
+    bool tls_getters;
     bool external_use;
     bool llvm_only;
     bool always_inline;
@@ -168,6 +170,7 @@ struct OptimizationOptions {
     static constexpr OptimizationOptions defaults(
         bool lower_intrinsics=true,
         bool dump_native=false,
+        bool tls_getters=false,
         bool external_use=false,
         bool llvm_only=false,
         bool always_inline=true,
@@ -195,12 +198,23 @@ struct OptimizationOptions {
         bool sanitize_address=false
 #endif
 ) JL_NOTSAFEPOINT {
-        return {lower_intrinsics, dump_native, external_use, llvm_only,
-                always_inline, enable_early_simplifications,
-                enable_early_optimizations, enable_scalar_optimizations,
-                enable_loop_optimizations, enable_vector_pipeline,
-                remove_ni, cleanup, warn_missed_transformations,
-                sanitize_memory, sanitize_thread, sanitize_address};
+        return {lower_intrinsics,
+                dump_native,
+                tls_getters,
+                external_use,
+                llvm_only,
+                always_inline,
+                enable_early_simplifications,
+                enable_early_optimizations,
+                enable_scalar_optimizations,
+                enable_loop_optimizations,
+                enable_vector_pipeline,
+                remove_ni,
+                cleanup,
+                warn_missed_transformations,
+                sanitize_memory,
+                sanitize_thread,
+                sanitize_address};
     }
 };
 
@@ -516,7 +530,7 @@ jl_llvm_functions_t jl_emit_codedecls(
 jl_code_info_t *jl_get_method_ir(jl_code_instance_t *ci);
 void emit_always_inline(jl_codegen_output_t &out,
                         unique_function<jl_code_info_t *(jl_code_instance_t *)> get_src);
-void emit_llvmcall_modules(jl_codegen_output_t &out);
+void emit_llvmcall_modules(jl_codegen_output_t &out) JL_NOTSAFEPOINT;
 
 enum CompilationPolicy {
     Default = 0,
@@ -572,7 +586,7 @@ static const inline char *name_from_method_instance(jl_method_instance_t *li) JL
     return jl_is_method(li->def.method) ? jl_symbol_name(li->def.method->name) : "top-level scope";
 }
 
-static inline jl_value_t *get_ci_abi(jl_code_instance_t *ci)
+static inline jl_value_t *get_ci_abi(jl_code_instance_t *ci JL_PROPAGATES_ROOT) JL_NOTSAFEPOINT
 {
     if (jl_typeof(ci->def) == (jl_value_t*)jl_abioverride_type)
         return ((jl_abi_override_t*)ci->def)->abi;
@@ -644,7 +658,7 @@ public:
                                      jitlink::LinkGraph &G, MemoryBufferRef InputObject,
                                      std::unique_ptr<jl_linker_info_t> LinkerInfo)
         JL_NOTSAFEPOINT;
-    Error notifyEmitted(orc::MaterializationResponsibility &MR) override;
+    Error notifyEmitted(orc::MaterializationResponsibility &MR) override JL_NOTSAFEPOINT_ENTER JL_NOTSAFEPOINT_LEAVE;
     Error notifyFailed(orc::MaterializationResponsibility &MR) override;
     Error notifyRemovingResources(orc::JITDylib &JD, orc::ResourceKey K) override;
     void notifyTransferringResources(orc::JITDylib &JD, orc::ResourceKey DstKey,
@@ -859,7 +873,10 @@ public:
 
     // Note that this is a potential safepoint due to jl_get_library_ and jl_dlsym calls
     // and must be called from inside safe-regions due to internal use of locks
+    // (this lock strategy is unusual here, so the annotations aren't entirely correct)
     void optimizeDLSyms(Module &M) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER;
+
+    void shutdown() JL_NOTSAFEPOINT;
 
 protected:
     // Choose globally unique names for the functions defined by the given CI
@@ -899,7 +916,7 @@ protected:
     // returning a pointer into CISymbols or NULL if the CI is not compiled.
     CISymbolPtr *linkCISymbol(jl_code_instance_t *CI) JL_NOTSAFEPOINT;
 
-    void optimizeModule(Module &M) JL_NOTSAFEPOINT;
+    void optimizeModule(Module &M) JL_NOTSAFEPOINT_ENTER JL_NOTSAFEPOINT_LEAVE;
     std::unique_ptr<MemoryBuffer> compileModule(Module &M) JL_NOTSAFEPOINT;
 
 private:
@@ -931,6 +948,8 @@ private:
 
     std::mutex llvm_printing_mutex{};
     SmallVector<std::function<void()>, 0> PrintLLVMTimers;
+
+    ObjCache OCache;
 
     _Atomic(size_t) jit_bytes_size{0};
     _Atomic(size_t) jitcounter{0};
@@ -996,3 +1015,9 @@ CodeGenOptLevel CodeGenOptLevelFor(int optlevel) JL_NOTSAFEPOINT;
 #else
 CodeGenOpt::Level CodeGenOptLevelFor(int optlevel) JL_NOTSAFEPOINT;
 #endif
+
+void jl_jit_add_bytes(size_t bytes) JL_NOTSAFEPOINT;
+
+void jl_register_jit_object(const object::ObjectFile &Object,
+                            std::function<uint64_t(const StringRef &)> getLoadAddress,
+                            const jl_linker_info_t &Info) JL_NOTSAFEPOINT_ENTER JL_NOTSAFEPOINT_LEAVE;

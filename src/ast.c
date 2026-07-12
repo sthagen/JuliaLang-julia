@@ -45,7 +45,7 @@ typedef struct _jl_ast_context_t {
 static jl_ast_context_t jl_ast_main_ctx;
 
 #ifdef __clang_gcanalyzer__
-jl_ast_context_t *jl_ast_ctx(fl_context_t *fl) JL_GLOBALLY_ROOTED JL_NOTSAFEPOINT;
+extern jl_ast_context_t *jl_ast_ctx(fl_context_t *fl) JL_GLOBALLY_ROOTED JL_NOTSAFEPOINT;
 #else
 #define jl_ast_ctx(fl_ctx) container_of(fl_ctx, jl_ast_context_t, fl)
 #endif
@@ -330,9 +330,10 @@ void jl_init_common_symbols(void)
     jl_sequentially_consistent_sym = jl_symbol("sequentially_consistent");
     jl_uninferred_sym = jl_symbol("uninferred");
     jl_latestworld_sym = jl_symbol("latestworld");
+    jl_trim_sym = jl_symbol("trim");
 }
 
-JL_DLLEXPORT void jl_lisp_prompt(void)
+void jl_lisp_prompt(void)
 {
     // Make `--lisp` sigatomic in order to avoid triggering the sigint safepoint.
     // We don't have our signal handler registered in that case anyway...
@@ -989,7 +990,7 @@ static int is_self_escaping_expr(jl_expr_t *e) JL_NOTSAFEPOINT
 
 // any AST, except those that cannot contain symbols
 // and have no side effects
-int need_esc_node(jl_value_t *e) JL_NOTSAFEPOINT
+static int need_esc_node(jl_value_t *e) JL_NOTSAFEPOINT
 {
     if (jl_is_linenode(e)
         || jl_is_ssavalue(e)
@@ -1267,7 +1268,8 @@ JL_DLLEXPORT jl_value_t *jl_lower(jl_value_t *expr, jl_module_t *inmodule,
     args[6] = warn ? jl_true : jl_false;
     jl_task_t *ct = jl_current_task;
     size_t last_age = ct->world_age;
-    ct->world_age = jl_atomic_load_acquire(&jl_world_counter);
+    size_t lowering_world = jl_lowering_world;
+    ct->world_age = lowering_world ? lowering_world : jl_atomic_load_acquire(&jl_world_counter);
     jl_value_t *result = jl_apply(args, 7);
     ct->world_age = last_age;
     args[0] = result; // root during error check below

@@ -92,7 +92,11 @@ static void jl_register_root_module(jl_module_t *m)
     jl_value_t *args[2];
     args[0] = register_module_func;
     args[1] = (jl_value_t*)m;
+    jl_task_t *ct = jl_current_task;
+    size_t last_age = ct->world_age;
+    ct->world_age = jl_atomic_load_acquire(&jl_world_counter);
     jl_apply(args, 2);
+    ct->world_age = last_age;
 }
 
 jl_array_t *jl_get_loaded_modules(void)
@@ -286,7 +290,6 @@ static jl_value_t *jl_eval_dot_expr(jl_task_t *ct, jl_module_t *m, jl_value_t *x
     return args[0];
 }
 
-extern void check_safe_newbinding(jl_module_t *m, jl_sym_t *var);
 void jl_declare_global(jl_module_t *m, jl_value_t *arg, jl_value_t *set_type, int strong) {
     // create uninitialized mutable binding for "global x" decl sometimes or probably
     jl_module_t *gm;
@@ -493,7 +496,7 @@ int jl_is_toplevel_only_expr(jl_value_t *e) JL_NOTSAFEPOINT
          ((jl_expr_t*)e)->head == jl_incomplete_sym);
 }
 
-int jl_needs_lowering(jl_value_t *e) JL_NOTSAFEPOINT
+static int jl_needs_lowering(jl_value_t *e) JL_NOTSAFEPOINT
 {
     if (!jl_is_expr(e))
         return 0;

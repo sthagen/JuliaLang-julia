@@ -10,6 +10,7 @@
 #include "julia.h"
 #include "julia_internal.h"
 #include "llvm-version.h"
+#include "processor.h"
 
 const unsigned int host_char_bit = 8;
 
@@ -356,10 +357,10 @@ static inline float bfloat_to_float(uint16_t param) JL_NOTSAFEPOINT
 // bfloat16 conversion API
 
 // for use in APInt (without the ABI shenanigans from below)
-uint16_t julia_float_to_bfloat(float param) {
+uint16_t julia_float_to_bfloat(float param) JL_NOTSAFEPOINT {
     return float_to_bfloat(param);
 }
-float julia_bfloat_to_float(uint16_t param) {
+float julia_bfloat_to_float(uint16_t param) JL_NOTSAFEPOINT {
     return bfloat_to_float(param);
 }
 
@@ -928,7 +929,7 @@ static void jl_##name##bf16(unsigned runtime_nbits, void *pa, void *pb, void *pc
 
 // unary operator generator //
 
-typedef void (*intrinsic_1_t)(unsigned, void*, void*);
+typedef void (*intrinsic_1_t)(unsigned, void*, void*) JL_NOTSAFEPOINT;
 SELECTOR_FUNC(intrinsic_1)
 #define un_iintrinsic(name, u) \
 JL_DLLEXPORT jl_value_t *jl_##name(jl_value_t *a) \
@@ -954,7 +955,7 @@ static const select_intrinsic_1_t name##_list = { \
 }; \
 un_iintrinsic(name, u)
 
-typedef unsigned (*intrinsic_u1_t)(unsigned, void*);
+typedef unsigned (*intrinsic_u1_t)(unsigned, void*) JL_NOTSAFEPOINT;
 SELECTOR_FUNC(intrinsic_u1)
 #define uu_iintrinsic(name, u) \
 JL_DLLEXPORT jl_value_t *jl_##name(jl_value_t *a) \
@@ -1038,8 +1039,8 @@ static inline jl_value_t *jl_intrinsiclambda_u1(jl_value_t *ty, void *pa, unsign
 
 // conversion operator
 
-typedef void (*intrinsic_cvt_t)(jl_datatype_t*, void*, jl_datatype_t*, void*);
-typedef unsigned (*intrinsic_cvt_check_t)(unsigned, unsigned, void*);
+typedef void (*intrinsic_cvt_t)(jl_datatype_t*, void*, jl_datatype_t*, void*) JL_NOTSAFEPOINT;
+typedef unsigned (*intrinsic_cvt_check_t)(unsigned, unsigned, void*) JL_NOTSAFEPOINT;
 #define cvt_iintrinsic(LLVMOP, name) \
 JL_DLLEXPORT jl_value_t *jl_##name(jl_value_t *ty, jl_value_t *a) \
 { \
@@ -1080,9 +1081,9 @@ JL_DLLEXPORT jl_value_t *jl_##name(jl_value_t *a) \
     return jl_##name##_withtype(jl_typeof(a), a); \
 }
 
-typedef void (fintrinsic_op1)(unsigned, jl_value_t*, void*, void*);
+typedef void (*fintrinsic_op1)(unsigned, jl_value_t*, void*, void*) JL_NOTSAFEPOINT;
 
-static inline jl_value_t *jl_fintrinsic_1(jl_value_t *ty, jl_value_t *a, const char *name, fintrinsic_op1 *bfloatop, fintrinsic_op1 *halfop, fintrinsic_op1 *floatop, fintrinsic_op1 *doubleop)
+static inline jl_value_t *jl_fintrinsic_1(jl_value_t *ty, jl_value_t *a, const char *name, fintrinsic_op1 bfloatop, fintrinsic_op1 halfop, fintrinsic_op1 floatop, fintrinsic_op1 doubleop)
 {
     jl_task_t *ct = jl_current_task;
     jl_datatype_t *aty = (jl_datatype_t *)jl_typeof(a);
@@ -1112,7 +1113,7 @@ static inline jl_value_t *jl_fintrinsic_1(jl_value_t *ty, jl_value_t *a, const c
 
 // integer
 
-typedef void (*intrinsic_2_t)(unsigned, void*, void*, void*);
+typedef void (*intrinsic_2_t)(unsigned, void*, void*, void*) JL_NOTSAFEPOINT;
 SELECTOR_FUNC(intrinsic_2)
 #define bi_iintrinsic(name, u, cvtb) \
 JL_DLLEXPORT jl_value_t *jl_##name(jl_value_t *a, jl_value_t *b) \
@@ -1135,7 +1136,7 @@ bi_iintrinsic(name, u, cvtb)
 #define bi_iintrinsic_fast(LLVMOP, OP, name, u) \
     bi_iintrinsic_cnvtb_fast(LLVMOP, OP, name, u, 0)
 
-typedef int (*intrinsic_cmp_t)(unsigned, void*, void*);
+typedef int (*intrinsic_cmp_t)(unsigned, void*, void*) JL_NOTSAFEPOINT;
 SELECTOR_FUNC(intrinsic_cmp)
 #define cmp_iintrinsic(name, u) \
 JL_DLLEXPORT jl_value_t *jl_##name(jl_value_t *a, jl_value_t *b) \
@@ -1386,7 +1387,7 @@ bi_fintrinsic(sub,sub_float)
 bi_fintrinsic(mul,mul_float)
 bi_fintrinsic(div,div_float)
 
-float min_float(float x, float y) JL_NOTSAFEPOINT
+static float min_float(float x, float y) JL_NOTSAFEPOINT
 {
     float diff = x - y;
     float argmin = signbit(diff) ? x : y;
@@ -1394,7 +1395,7 @@ float min_float(float x, float y) JL_NOTSAFEPOINT
     return is_nan ? diff : argmin;
 }
 
-double min_double(double x, double y) JL_NOTSAFEPOINT
+static double min_double(double x, double y) JL_NOTSAFEPOINT
 {
     double diff = x - y;
     double argmin = signbit(diff) ? x : y;
@@ -1405,7 +1406,7 @@ double min_double(double x, double y) JL_NOTSAFEPOINT
 #define _min(a, b) sizeof(a) == sizeof(float) ? min_float(a, b) : min_double(a, b)
 bi_fintrinsic(_min, min_float)
 
-float max_float(float x, float y) JL_NOTSAFEPOINT
+static float max_float(float x, float y) JL_NOTSAFEPOINT
 {
     float diff = x - y;
     float argmax = signbit(diff) ? y : x;
@@ -1413,7 +1414,7 @@ float max_float(float x, float y) JL_NOTSAFEPOINT
     return is_nan ? diff : argmax;
 }
 
-double max_double(double x, double y) JL_NOTSAFEPOINT
+static double max_double(double x, double y) JL_NOTSAFEPOINT
 {
     double diff = x - y;
     double argmax = signbit(diff) ? y : x;
@@ -1630,7 +1631,7 @@ cvt_iintrinsic(APInt_fptoui, fptoui)
  * pr:  Pointer to result data
  */
 
-static inline void fptrunc(jl_datatype_t *aty, void *pa, jl_datatype_t *ty, void *pr)
+static inline void fptrunc(jl_datatype_t *aty, void *pa, jl_datatype_t *ty, void *pr) JL_NOTSAFEPOINT
 {
     unsigned isize = jl_datatype_size(aty), osize = jl_datatype_size(ty);
     if (!(osize < isize)) {
@@ -1654,7 +1655,7 @@ static inline void fptrunc(jl_datatype_t *aty, void *pa, jl_datatype_t *ty, void
 #undef fptrunc_convert
 }
 
-static inline void fpext(jl_datatype_t *aty, void *pa, jl_datatype_t *ty, void *pr)
+static inline void fpext(jl_datatype_t *aty, void *pa, jl_datatype_t *ty, void *pr) JL_NOTSAFEPOINT
 {
     unsigned isize = jl_datatype_size(aty), osize = jl_datatype_size(ty);
     if (!(osize > isize)) {
@@ -1743,7 +1744,6 @@ un_fintrinsic(trunc_float,trunc_llvm)
 un_fintrinsic(rint_float,rint_llvm)
 un_fintrinsic(sqrt_float,sqrt_llvm)
 un_fintrinsic(sqrt_float,sqrt_llvm_fast)
-jl_value_t *jl_cpu_has_fma(int bits);
 
 JL_DLLEXPORT jl_value_t *jl_have_fma(jl_value_t *typ)
 {

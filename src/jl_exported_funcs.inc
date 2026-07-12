@@ -20,6 +20,7 @@
     XX(jl_apply_type) \
     XX(jl_apply_type1) \
     XX(jl_apply_type2) \
+    XX(jl_arg_slot_type) \
     XX(jl_argument_datatype) \
     XX(jl_argument_datatypename) \
     XX(jl_array_del_end) \
@@ -180,7 +181,6 @@
     XX(jl_gc_sync_total_bytes) \
     XX(jl_gc_total_hrtime) \
     XX(jl_gc_wb_cold) \
-    XX(jl_gdblookup) \
     XX(jl_generating_output) \
     XX(jl_declare_const_gf) \
     XX(jl_declare_constant_val) \
@@ -288,7 +288,6 @@
     XX(jl_is_unary_and_binary_operator) \
     XX(jl_is_unary_operator) \
     XX(jl_lazy_load_and_lookup) \
-    XX(jl_lisp_prompt) \
     XX(jl_load) \
     XX(jl_load_) \
     XX(jl_load_and_lookup) \
@@ -428,6 +427,7 @@
     XX(jl_sigatomic_begin) \
     XX(jl_sigatomic_end) \
     XX(jl_spawn) \
+    XX(jl_sparam_slot_value) \
     XX(jl_specializations_get_linfo) \
     XX(jl_specializations_lookup) \
     XX(jl_static_show) \
