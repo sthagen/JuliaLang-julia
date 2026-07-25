@@ -1324,9 +1324,9 @@ precompile_test_harness("invoke") do dir
         end
 
         m = get_method_for_type(M.h, Real)
-        @test nvalid(m.specializations::Core.MethodInstance) == 1
+        @test m.specializations === Core.svec()
         m = get_method_for_type(M.hnc, Real)
-        @test nvalid(m.specializations::Core.MethodInstance) == 1
+        @test m.specializations === Core.svec()
         m = only(methods(M.callq))
         @test nvalid(m.specializations::Core.MethodInstance) == 1
         m = only(methods(M.callqnc))
@@ -1992,6 +1992,76 @@ precompile_test_harness("PkgCacheInspector") do load_path
         ci isa Core.CodeInstance || return false
         mi = ci.def::Core.MethodInstance
         return mi.specTypes == Tuple{typeof(Base.repl_cmd), Int, String}
+    end
+end
+
+precompile_test_harness("custom MethodTable dispatch status") do load_path
+    # Custom method-table methods loaded from a package image need dispatch fast-path bits restored.
+    pkg = :OverlayDispatchStatus
+    write(joinpath(load_path, "OverlayDispatchStatus.jl"),
+        """
+        module OverlayDispatchStatus
+        function f end
+        Base.Experimental.@MethodTable(mt)
+        Base.Experimental.@overlay mt f(x::Int) = x + 1
+        # generic code that resolves `f` through the overlay table when inferred
+        # with an overlay-aware interpreter (like GPU runtime library functions)
+        g(x) = f(x) * 2
+        end
+        """)
+    # A dependent package whose image holds CodeInstances with call edges that
+    # were resolved through the dependency's overlay table: without the dispatch
+    # bits restored on the overlay method, edge revalidation drops these CIs on
+    # image load (the whole cross-session cache of GPUCompiler-style consumers).
+    newinterp_path = abspath(joinpath(@__DIR__, "../Compiler/test/newinterp.jl"))
+    write(joinpath(load_path, "OverlayDispatchStatusUser.jl"),
+        """
+        module OverlayDispatchStatusUser
+        import OverlayDispatchStatus
+
+        module Custom
+            import Base.Compiler: Compiler
+            include($(repr(newinterp_path)))
+            @newinterp OverlayDispatchStatusInterp
+            import OverlayDispatchStatus
+            Compiler.method_table(interp::OverlayDispatchStatusInterp) =
+                Compiler.OverlayMethodTable(Compiler.get_inference_world(interp),
+                                            OverlayDispatchStatus.mt)
+        end
+
+        # a call edge directly to the dependency's overlay method
+        caller(x) = OverlayDispatchStatus.f(x)
+        # an overlay-resolved edge reached through generic code in the dependency
+        chain(x) = OverlayDispatchStatus.g(x)
+
+        let interp = Custom.OverlayDispatchStatusInterp()
+            Base.return_types(caller, (Int,); interp)
+            Base.return_types(chain, (Int,); interp)
+        end
+        end
+        """)
+    Base.compilecache(Base.PkgId(string(pkg)))
+    @eval using $pkg
+    M = invokelatest(getglobal, @__MODULE__, pkg)
+    invokelatest() do
+        ms = Base._methods_by_ftype(Tuple{typeof(M.f), Int}, M.mt, 1, Base.get_world_counter())
+        method = only(ms).method
+        @test method.module === M
+        @test !iszero(method.dispatch_status & Base.ReinferUtils.METHOD_SIG_LATEST_WHICH)
+        @test !iszero(method.dispatch_status & Base.ReinferUtils.METHOD_SIG_LATEST_ONLY)
+    end
+    Base.compilecache(Base.PkgId("OverlayDispatchStatusUser"))
+    @eval using OverlayDispatchStatusUser
+    invokelatest() do
+        U = OverlayDispatchStatusUser
+        owner = U.Custom.OverlayDispatchStatusInterp
+        # dependent CIs with overlay-resolved call edges must survive loading U's image
+        for m in (only(methods(U.caller)),          # edge to the overlay method itself
+                  only(methods(U.chain)),           # edge into dependency generic code
+                  only(methods(M.g)))               # dependency code with the overlay edge
+            mi = only(Base.specializations(m))
+            @test check_presence(mi, owner) !== nothing
+        end
     end
 end
 
@@ -3533,6 +3603,75 @@ precompile_test_harness("include mapexpr persistence") do dir
 
     # Exactly the three non-identity includes were recorded (the identity one was not).
     @test length(mapexprs) == 3
+end
+
+precompile_test_harness("cancellation source relinking") do dir
+    write(joinpath(dir, "CancelRelink.jl"),
+          """
+          module CancelRelink
+              using Base: CancellationToken, CancellationTokenSource
+              const ROOT = CancellationTokenSource()
+              const LEFT = CancellationTokenSource(CancellationToken(ROOT))
+              const RIGHT = CancellationTokenSource(CancellationToken(ROOT))
+              const CHILD = CancellationTokenSource(CancellationToken(LEFT), CancellationToken(RIGHT))
+          end
+          """)
+    Base.compilecache(Base.PkgId("CancelRelink"))
+    @eval using CancelRelink
+    invokelatest() do
+        # the sources were serialized into the package image with their weak
+        # child lists dropped; loading must have relinked them under their
+        # parents so that cancellation still propagates through the diamond
+        @test CancelRelink.CHILD.nparents == 2
+        @test Base._cancel_parent(CancelRelink.CHILD, 1) === CancelRelink.LEFT
+        @test !Base.iscancelled(CancelRelink.CHILD)
+        Base.cancel!(CancelRelink.ROOT)
+        @test Base.iscancelled(CancelRelink.LEFT)
+        @test Base.iscancelled(CancelRelink.RIGHT)
+        @test Base.iscancelled(CancelRelink.CHILD)
+    end
+end
+
+precompile_test_harness("cancellation relink under cancelled external parent") do dir
+    write(joinpath(dir, "CancelExtA.jl"),
+          """
+          module CancelExtA
+              using Base: CancellationTokenSource
+              const A_ROOT = CancellationTokenSource()
+          end
+          """)
+    write(joinpath(dir, "CancelExtB.jl"),
+          """
+          module CancelExtB
+              using CancelExtA
+              using Base: CancellationToken, CancellationTokenSource
+              const B_MID = CancellationTokenSource(CancellationToken(CancelExtA.A_ROOT))
+              const B_CHILD = CancellationTokenSource(CancellationToken(B_MID))
+              const B_GRAND = CancellationTokenSource(CancellationToken(B_CHILD))
+              # a cancel! interrupted mid-walk (state raised, children not
+              # visited) captured in the image: load-time propagation must
+              # not treat the already-raised state as having been walked
+              Base._raise_state!(B_CHILD, 0x01)
+          end
+          """)
+    Base.compilecache(Base.PkgId("CancelExtA"))
+    Base.compilecache(Base.PkgId("CancelExtB"))
+    @eval using CancelExtA
+    invokelatest() do
+        Base.cancel!(CancelExtA.A_ROOT)
+    end
+    @eval using CancelExtB
+    invokelatest() do
+        # CancelExtB's sources re-attached at load time under the already-
+        # cancelled A_ROOT: B_MID is born cancelled during its relink, and
+        # that state must reach every descendant regardless of the order in
+        # which the image's fixups relinked them - including through
+        # B_CHILD, whose already-cancelled (but never walked) state must
+        # not prune the propagation
+        @test Base.iscancelled(CancelExtB.B_MID)
+        @test Base.iscancelled(CancelExtB.B_CHILD)
+        @test Base.iscancelled(CancelExtB.B_GRAND)
+    end
 end
 
 finish_precompile_test!()

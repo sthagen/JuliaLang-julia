@@ -167,7 +167,7 @@ void jl_dump_llvm_opt_impl(void *s)
 static void decorate_module(Module &M) JL_NOTSAFEPOINT;
 
 // convert local roots into global roots, if they are needed
-static void jl_promote_method_roots(jl_codegen_output_t &out, jl_method_instance_t *mi)
+static void jl_promote_method_roots(jl_codegen_output_t &out, jl_method_instance_t *mi) JL_CANSAFEPOINT
 {
     JL_GC_PROMISE_ROOTED(out.temporary_roots); // rooted by caller
     if (jl_array_dim0(out.temporary_roots) == 0)
@@ -181,7 +181,7 @@ static void jl_promote_method_roots(jl_codegen_output_t &out, jl_method_instance
         auto ref = out.global_targets.find((void*)val);
         if (ref == out.global_targets.end())
             continue;
-        auto get_global_root = [val, m]() {
+        auto get_global_root = [val, m]() JL_CANSAFEPOINT {
             if (jl_is_globally_rooted(val))
                 return val;
             if (jl_is_method(m) && m->roots) {
@@ -690,7 +690,9 @@ void JLDebuginfoPlugin::notifyMaterializingWithInfo(
     }
 }
 
-Error JLDebuginfoPlugin::notifyEmitted(MaterializationResponsibility &MR)
+// TODO: analysis disabled since we aren't able to annotate that it was safe to lock
+// std::mutex here because we asserted !jl_gcunsaferegion, so we don't need to assert jl_notsafepoint
+Error JLDebuginfoPlugin::notifyEmitted(MaterializationResponsibility &MR) JL_NO_SAFEPOINT_ANALYSIS // NOLINT[julia-first-decl-annotations]
 {
     {
         std::lock_guard<std::mutex> lock(PluginMutex);
@@ -882,7 +884,7 @@ public:
     }
 
     // During materialization: finalizers disabled, GC safe
-    void materialize(std::unique_ptr<MaterializationResponsibility> R) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER override
+    void materialize(std::unique_ptr<MaterializationResponsibility> R) JL_CANSAFEPOINT_ENTER_LEAVE override // NOLINT[julia-first-decl-annotations]
     {
         auto &ES = R->getExecutionSession();
 
@@ -899,7 +901,7 @@ public:
                                       MDString::get(*Out.ctx,
                                                     JIT.getTargetFeatureString()));
             Obj = JIT.OCache.get(*Out.module,
-                                 [this]() JL_NOTSAFEPOINT_ENTER JL_NOTSAFEPOINT_LEAVE {
+                                 [this]() JL_CANSAFEPOINT_ENTER_LEAVE {
                                      JIT.optimizeModule(*Out.module);
                                      return JIT.compileModule(*Out.module);
                                  });
@@ -983,7 +985,7 @@ public:
     };
 
     // During materialization: finalizers disabled, GC safe
-    void materialize(std::unique_ptr<MaterializationResponsibility> R) JL_NOTSAFEPOINT_ENTER JL_NOTSAFEPOINT_LEAVE override
+    void materialize(std::unique_ptr<MaterializationResponsibility> R) JL_CANSAFEPOINT_ENTER_LEAVE override // NOLINT[julia-first-decl-annotations]
     {
         auto Ctx = std::make_unique<LLVMContext>();
         auto Mod =
@@ -1536,7 +1538,9 @@ struct JuliaOJIT::DLSymOptimizer {
         return addr;
     }
 
-    void *lookup(const char *libname, const char *fname) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER {
+    // TODO: analysis disabled since we aren't able to annotate that it was safe to lock
+    // std::mutex here because we asserted !jl_gcunsaferegion, so we don't need to assert jl_notsafepoint
+    void *lookup(const char *libname, const char *fname) JL_CANSAFEPOINT_ENTER_LEAVE JL_NO_SAFEPOINT_ANALYSIS {
         StringRef lib(libname);
         StringRef f(fname);
         std::lock_guard<std::mutex> lock(symbols_mutex);
@@ -1572,7 +1576,7 @@ struct JuliaOJIT::DLSymOptimizer {
         return handle;
     }
 
-    void operator()(Module &M) JL_NOTSAFEPOINT_LEAVE JL_NOTSAFEPOINT_ENTER {
+    void operator()(Module &M) JL_CANSAFEPOINT_ENTER_LEAVE {
         for (auto &GV : M.globals()) {
             auto Name = GV.getName();
             if (Name.starts_with("jlplt") && Name.ends_with("got")) {
@@ -2320,6 +2324,23 @@ bool JuliaOJIT::linkOutput(orc::MaterializationResponsibility &MR, MemoryBufferR
             RenameDef(Funcs.specptr, S.specptr);
     }
 
+    // Pre-pass: find CI equivalents, and build EquivMap for use in the main
+    // pass to memoize findCompatibleCI.
+    DenseMap<jl_code_instance_t *, jl_code_instance_t *> EquivMap;
+    for (auto &[Call, T] : Info->call_targets) {
+        auto [CI, API] = Call;
+        JL_GC_PROMISE_ROOTED(CI);
+        if (!Syms.contains(T))
+            continue;
+        if (EquivMap.contains(CI))
+            continue;
+        if (!jl_mi_cache_has_ci(jl_get_ci_mi(CI), CI)) {
+            jl_code_instance_t *Equiv = findCompatibleCI(CI);
+            if (Equiv != CI)
+                EquivMap[CI] = Equiv;
+        }
+    }
+
     // Rename referenced CIs in the workqueue.
     for (auto &[Call, T] : Info->call_targets) {
         auto [CI, API] = Call;
@@ -2335,7 +2356,7 @@ bool JuliaOJIT::linkOutput(orc::MaterializationResponsibility &MR, MemoryBufferR
             continue;
         }
         JL_GC_PROMISE_ROOTED(CI);
-        auto Dest = linkCallTarget(MR, CI, API);
+        auto Dest = linkCallTarget(MR, CI, API, EquivMap);
         if (!Dest)
             return false;
         if (auto *DestSym = findLinkGraphSymbolByName(G, Dest);
@@ -2394,16 +2415,19 @@ bool JuliaOJIT::linkOutput(orc::MaterializationResponsibility &MR, MemoryBufferR
 
 // Must hold LinkerMutex.
 orc::SymbolStringPtr JuliaOJIT::linkCallTarget(orc::MaterializationResponsibility &MR,
-                                               jl_code_instance_t *CI, jl_invoke_api_t API)
+                                               jl_code_instance_t *CI, jl_invoke_api_t API,
+                                               const DenseMap<jl_code_instance_t *, jl_code_instance_t *> &EquivMap)
 {
-    // This condition should match that in jl_add_codeinst_to_jit!, which will
-    // add a different, compatible CodeInstance to the JIT but not update the
-    // invoke statement.
-    if (!jl_mi_cache_has_ci(jl_get_ci_mi(CI), CI))
-        CI = findCompatibleCI(CI);
-    auto It = CISymbols.find(CI);
-    if (It != CISymbols.end() && It->second.invoke_api == API)
-        return It->second.specptr;
+    {
+        auto It = EquivMap.find(CI);
+        if (It != EquivMap.end())
+            CI = It->second;
+    }
+    {
+        auto It = CISymbols.find(CI);
+        if (It != CISymbols.end() && It->second.invoke_api == API)
+            return It->second.specptr;
+    }
 
     CISymbolPtr *Sym = linkCISymbol(CI);
 
@@ -2434,30 +2458,19 @@ orc::SymbolStringPtr JuliaOJIT::linkCallTarget(orc::MaterializationResponsibilit
     return Sym->specptr;
 }
 
-jl_code_instance_t *JuliaOJIT::findCompatibleCI(jl_code_instance_t *CI)
+jl_code_instance_t *JuliaOJIT::findCompatibleCI(jl_code_instance_t *ci)
 {
-    // add_codeinsts_to_jit! may have added an equivalent CI to the JIT, but
+    // add_codeinsts_to_jit! may have added an equivalent ci to the JIT, but
     // the invoke itself won't be updated.
-    auto MI = jl_get_ci_mi(CI);
-    jl_value_t *Def = CI->def;
-    jl_value_t *Owner = CI->owner;
-    jl_value_t *RetType = CI->rettype;
-    size_t MinWorld = jl_atomic_load_relaxed(&CI->min_world);
-    size_t MaxWorld = jl_atomic_load_relaxed(&CI->max_world);
-    auto IsCompatible = [=](jl_code_instance_t *CI2) JL_NOTSAFEPOINT {
-        return jl_atomic_load_relaxed(&CI2->min_world) <= MinWorld &&
-               jl_atomic_load_relaxed(&CI2->max_world) >= MaxWorld &&
-               jl_egal(CI2->def, Def) && jl_egal(CI2->owner, Owner) &&
-               jl_egal(CI2->rettype, RetType);
-    };
-    for (auto CI2 = jl_atomic_load_relaxed(&MI->cache); CI2;
-         CI2 = jl_atomic_load_relaxed(&CI2->next)) {
-        if (CI2 != CI && IsCompatible(CI2) &&
-            (CISymbols.contains(CI2) || jl_atomic_load_relaxed(&CI2->invoke))) {
-            return CI2;
+    auto mi = jl_get_ci_mi(ci);
+    for (auto ci2 = jl_atomic_load_relaxed(&mi->cache); ci2;
+         ci2 = jl_atomic_load_relaxed(&ci2->next)) {
+        if (ci2 != ci && jl_is_ci_equiv(ci, ci2, 0) &&
+            (CISymbols.contains(ci2) || jl_atomic_load_relaxed(&ci2->invoke))) {
+            return ci2;
         }
     }
-    return CI;
+    return ci;
 }
 
 CISymbolPtr *JuliaOJIT::linkCISymbol(jl_code_instance_t *CI)
@@ -2467,8 +2480,14 @@ CISymbolPtr *JuliaOJIT::linkCISymbol(jl_code_instance_t *CI)
     void *SpecPtr;
 
     // Tell the analyzer no safepoint is possible with waitcompile = 0
+#ifdef __clang_safetyanalysis__
+    #define jl_read_codeinst_invoke jl_read_codeinst_invoke_nosafepoint
+#endif
     void jl_read_codeinst_invoke(jl_code_instance_t *, uint8_t *, jl_callptr_t *, void **, int) JL_NOTSAFEPOINT;
     jl_read_codeinst_invoke(CI, &Flags, &Invoke, &SpecPtr, 0);
+#ifdef __clang_safetyanalysis__
+    #undef jl_read_codeinst_invoke
+#endif
 
     if (!(Flags & JL_CI_FLAGS_INVOKE_MATCHES_SPECPTR))
         return nullptr;
@@ -2673,6 +2692,12 @@ extern "C" JL_DLLEXPORT_CODEGEN
 size_t jl_jit_total_bytes_impl(void)
 {
     return jl_ExecutionEngine->getTotalBytes();
+}
+
+extern "C" JL_DLLEXPORT_CODEGEN
+const char *jl_objcache_disabled_notice_impl(void) JL_CANSAFEPOINT_ENTER_LEAVE
+{
+    return jl_ExecutionEngine->objCacheDisabledNotice();
 }
 
 // API for adding bytes to record being owned by the JIT

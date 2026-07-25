@@ -761,6 +761,7 @@ ndigits0znb(x::Bool, b::Integer) = x % Int
 
 # The suffix "pb" stands for "positive base"
 function ndigits0zpb(x::Integer, b::Integer)
+    @constprop :aggressive
     # precondition: b > 1
     x == 0 && return 0
     b = Int(b)
@@ -825,6 +826,7 @@ julia> Base.ndigits0z(10)
 See also [`ndigits`](@ref).
 """
 function ndigits0z(x::Integer, b::Integer)
+    @constprop :aggressive
     if b < -1
         ndigits0znb(x, b)
     elseif b > 1
@@ -1067,8 +1069,8 @@ function _base(base::Integer, x::Integer, pad::Int, neg::Bool)
     return str
 end
 
-split_sign(n::Integer) = unsigned(abs(n)), n < 0
-split_sign(n::Unsigned) = n, false
+split_sign(n::Integer) = (unsigned(abs(n)), n < 0)
+split_sign(n::Unsigned) = (n, false)
 
 """
     string(n::Integer; base::Integer = 10, pad::Integer = 1)
@@ -1097,6 +1099,7 @@ julia> @sprintf("%4i", 5)
 ```
 """
 function string(n::Integer; base::Integer = 10, pad::Integer = 1)
+    @constprop :aggressive
     pad = (min(max(pad, typemin(Int)), typemax(Int)) % Int)::Int
     if base == 2
         (n_positive, neg) = split_sign(n)
@@ -1136,13 +1139,15 @@ julia> bitstring(2.2)
 """
 function bitstring(x::T) where {T}
     isprimitivetype(T) || throw(ArgumentError(LazyString(T, " not a primitive type")))
-    sz = sizeof(T) * 8
+    sz = Core.bitsizeof(T)
+    onebyte = sz == 8
+    subbyte = sz < 8
     str = _string_n(sz)
     GC.@preserve str begin
         p = pointer(str)
         i = sz
         while i >= 4
-            b = UInt32(sizeof(T) == 1 ? bitcast(UInt8, x) : trunc_int(UInt8, x))
+            b = UInt32(onebyte ? bitcast(UInt8, x) : subbyte ? zext_int(UInt8, x) : trunc_int(UInt8, x))
             d = 0x30303030 +% ((b *% 0x08040201) >> 0x3) & 0x01010101
             unsafe_store!(p, (d >> 0x00) % UInt8, i-3)
             unsafe_store!(p, (d >> 0x08) % UInt8, i-2)
@@ -1150,6 +1155,12 @@ function bitstring(x::T) where {T}
             unsafe_store!(p, (d >> 0x18) % UInt8, i)
             x = lshr_int(x, 4)
             i -= 4
+        end
+        while i > 0
+            b = UInt8(onebyte ? bitcast(UInt8, x) : subbyte ? zext_int(UInt8, x) : trunc_int(UInt8, x))
+            unsafe_store!(p, 0x30 + (b & 0x01), i)
+            x = lshr_int(x, 1)
+            i -= 1
         end
     end
     return str

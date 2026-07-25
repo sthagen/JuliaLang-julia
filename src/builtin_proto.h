@@ -16,6 +16,7 @@ extern "C" {
     XX(_equiv_typedef,"_equiv_typedef") \
     XX(_expr,"_expr") \
     XX(_import, "_import") \
+    XX(_new_cancel_source,"_new_cancel_source") \
     XX(_primitivetype,"_primitivetype") \
     XX(_setsuper,"_setsuper!") \
     XX(_structtype,"_structtype") \
@@ -67,6 +68,7 @@ extern "C" {
     XX(setfieldonce,"setfieldonce!") \
     XX(setglobal,"setglobal!") \
     XX(setglobalonce,"setglobalonce!") \
+    XX(bitsizeof,"bitsizeof") \
     XX(sizeof,"sizeof") \
     XX(svec,"svec") \
     XX(swapfield,"swapfield!") \
@@ -79,7 +81,7 @@ extern "C" {
     XX(has_free_typevars,"has_free_typevars")
 
 #define DECLARE_BUILTIN(cname,jlname) \
-    JL_CALLABLE(jl_f_##cname);
+    JL_CALLABLE(jl_f_##cname) JL_CANSAFEPOINT;
 JL_BUILTIN_FUNCTIONS(DECLARE_BUILTIN)
 #undef DECLARE_BUILTIN
 
