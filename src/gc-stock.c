@@ -1308,6 +1308,11 @@ JL_DLLEXPORT void jl_gc_sweep_stack_pools_and_mtarraylist_buffers(jl_ptls_t ptls
     uv_mutex_unlock(&live_tasks_lock);
 }
 
+void jl_gc_notify_task_resume(jl_task_t *task) JL_NOTSAFEPOINT
+{
+    // do nothing
+}
+
 static void gc_pool_sync_nfree(jl_gc_pagemeta_t *pg, jl_taggedvalue_t *last) JL_NOTSAFEPOINT
 {
     assert(pg->fl_begin_offset != UINT16_MAX);
@@ -2225,13 +2230,13 @@ STATIC_INLINE void gc_mark_stack(jl_ptls_t ptls, jl_gcframe_t *s, uint32_t nroot
             }
             else {
                 new_obj = (jl_value_t *)gc_read_stack(&rts[i], offset, lb, ub);
-                if (gc_ptr_tag(new_obj, 1)) {
+                if (gc_ptr_tag(new_obj, GC_FIN_CFUNC_TAG)) {
                     // handle tagged pointers in finalizer list
-                    new_obj = (jl_value_t *)gc_ptr_clear_tag(new_obj, 1);
+                    new_obj = (jl_value_t *)gc_ptr_clear_tag(new_obj, GC_FIN_CFUNC_TAG);
                     // skip over the finalizer fptr
                     i++;
                 }
-                if (gc_ptr_tag(new_obj, 2))
+                if (gc_ptr_tag(new_obj, GC_FIN_COBJ_TAG))
                     continue;
                 // conservatively check for the presence of any smalltag type, instead of just NULL
                 // in the very unlikely event that codegen decides to root the result of julia.typeof
@@ -2337,12 +2342,12 @@ static void gc_mark_finlist_(jl_gc_markqueue_t *mq, jl_value_t *fl_parent, jl_va
         new_obj = *slot;
         if (__unlikely(new_obj == NULL))
             continue;
-        if (gc_ptr_tag(new_obj, 1)) {
-            new_obj = (jl_value_t *)gc_ptr_clear_tag(new_obj, 1);
+        if (gc_ptr_tag(new_obj, GC_FIN_CFUNC_TAG)) {
+            new_obj = (jl_value_t *)gc_ptr_clear_tag(new_obj, GC_FIN_CFUNC_TAG);
             fl_begin++;
             assert(fl_begin < fl_end);
         }
-        if (gc_ptr_tag(new_obj, 2))
+        if (gc_ptr_tag(new_obj, GC_FIN_COBJ_TAG))
             continue;
         gc_try_claim_and_push(mq, new_obj, NULL);
         if (fl_parent != NULL) {
@@ -2572,6 +2577,12 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                 size_t dtsz = sizeof(jl_cancel_source_t) + np * sizeof(jl_cancel_parent_link_t);
                 if (update_meta)
                     gc_setmark(ptls, o, bits, dtsz);
+                // the waiter-list head and the walk lock are strong
+                // (adjacent) slots (the world is stopped; the relaxed
+                // mutator ordering is irrelevant here)
+                gc_mark_objarray(ptls, new_obj, (jl_value_t**)&cs->waiters_head,
+                                 (jl_value_t**)&cs->waiters_head + 2, 1,
+                                 (2 << 2) | (bits & GC_OLD));
                 if (np > 0) {
                     jl_value_t **objary_begin = (jl_value_t**)jl_cancel_source_links(cs);
                     // stride over the link entries, visiting only the
@@ -2580,6 +2591,32 @@ FORCE_INLINE void gc_mark_outrefs(jl_ptls_t ptls, jl_gc_markqueue_t *mq, void *_
                     jl_value_t **objary_end = objary_begin + step * np;
                     uintptr_t nptr = (np << 2) | (bits & GC_OLD);
                     gc_mark_objarray(ptls, new_obj, objary_begin, objary_end, step, nptr);
+                }
+            }
+            else if (vtag == jl_wait_entry_tag << 4) {
+                // Variable-sized: `nslots` {owner, next, aux} wait slots
+                // follow the fixed fields; `task` and the per-slot `owner`
+                // and `next` are strong references, `aux` is data.
+                jl_wait_entry_t *we = (jl_wait_entry_t*)new_obj;
+                size_t ns = we->nslots;
+                size_t dtsz = sizeof(jl_wait_entry_t) + ns * sizeof(jl_wait_slot_t);
+                if (update_meta)
+                    gc_setmark(ptls, o, bits, dtsz);
+                jl_value_t **task = (jl_value_t**)&we->task;
+                gc_mark_objarray(ptls, new_obj, task, task + 1, 1,
+                                 (1 << 2) | (bits & GC_OLD));
+                if (ns > 0) {
+                    jl_value_t **b = (jl_value_t**)jl_wait_entry_slots(we);
+                    uint32_t step = sizeof(jl_wait_slot_t) / sizeof(jl_value_t*);
+                    uintptr_t nptr = (ns << 2) | (bits & GC_OLD);
+                    // two strided passes: the `owner` slot of each entry...
+                    gc_mark_objarray(ptls, new_obj, b, b + step * ns, step, nptr);
+                    // ...and the `next` slot. The endpoint must stay within
+                    // (or one past) the object: `b + 1 + step*ns` would point
+                    // a full word past its end, so end one past the last
+                    // `next` slot instead - the strided walk stops at the
+                    // same last element either way.
+                    gc_mark_objarray(ptls, new_obj, b + 1, b + step * (ns - 1) + 2, step, nptr);
                 }
             }
             else if (vtag == jl_string_tag << 4) {
@@ -2992,6 +3029,21 @@ static void gc_queue_thread_local(jl_gc_markqueue_t *mq, jl_ptls_t ptls2) JL_NOT
         gc_try_claim_and_push(mq, task, NULL);
         gc_heap_snapshot_record_root((jl_value_t*)task, "next task");
     }
+    task = ptls2->abandon_victim;
+    if (task != NULL) {
+        gc_try_claim_and_push(mq, task, NULL);
+        gc_heap_snapshot_record_root((jl_value_t*)task, "abandon victim");
+    }
+    task = ptls2->abandon_to;
+    if (task != NULL) {
+        gc_try_claim_and_push(mq, task, NULL);
+        gc_heap_snapshot_record_root((jl_value_t*)task, "abandon target");
+    }
+    jl_value_t *abandon_result = ptls2->abandon_result;
+    if (abandon_result != NULL) {
+        gc_try_claim_and_push(mq, abandon_result, NULL);
+        gc_heap_snapshot_record_root(abandon_result, "abandon result");
+    }
     task = ptls2->previous_task;
     if (task != NULL) {
         gc_try_claim_and_push(mq, task, NULL);
@@ -3114,7 +3166,7 @@ static void sweep_finalizer_list(arraylist_t *list) JL_NOTSAFEPOINT
     size_t j = 0;
     for (size_t i=0; i < len; i+=2) {
         void *v0 = items[i];
-        void *v = gc_ptr_clear_tag(v0, 3);
+        void *v = gc_ptr_clear_tag(v0, GC_FIN_TAG_MASK);
         if (__unlikely(!v0)) {
             // remove from this list
             continue;
@@ -3123,7 +3175,7 @@ static void sweep_finalizer_list(arraylist_t *list) JL_NOTSAFEPOINT
         void *fin = items[i+1];
         int isfreed;
         int isold;
-        if (gc_ptr_tag(v0, 2)) {
+        if (gc_ptr_tag(v0, GC_FIN_COBJ_TAG)) {
             isfreed = 1;
             isold = 0;
         }
@@ -3131,7 +3183,8 @@ static void sweep_finalizer_list(arraylist_t *list) JL_NOTSAFEPOINT
             isfreed = !gc_marked(jl_astaggedvalue(v)->bits.gc);
             isold = (list != &finalizer_list_marked &&
                      jl_astaggedvalue(v)->bits.gc == GC_OLD_MARKED &&
-                     jl_astaggedvalue(fin)->bits.gc == GC_OLD_MARKED);
+                     (gc_ptr_tag(v0, GC_FIN_CFUNC_TAG) ||
+                      jl_astaggedvalue(fin)->bits.gc == GC_OLD_MARKED));
         }
         if (isfreed || isold) {
             // remove from this list
@@ -3688,6 +3741,48 @@ static int _jl_gc_collect(jl_ptls_t ptls, jl_gc_collection_t collection) JL_NOTS
     reset_thread_gc_counts();
 
     return recollect;
+}
+
+// collector entry point and control
+_Atomic(uint32_t) jl_gc_disable_counter = 1;
+
+JL_DLLEXPORT int jl_gc_enable(int on)
+{
+    JL_SIGATOMIC_BEGIN();
+    jl_ptls_t ptls = jl_current_task->ptls;
+    int prev = !ptls->disable_gc;
+    ptls->disable_gc = (on == 0);
+    if (on && !prev) {
+        // disable -> enable
+        if (jl_atomic_fetch_add(&jl_gc_disable_counter, -1) == 1) {
+            gc_num.allocd += gc_num.deferred_alloc;
+            gc_num.deferred_alloc = 0;
+        }
+    }
+    else if (prev && !on) {
+        // enable -> disable
+        jl_atomic_fetch_add(&jl_gc_disable_counter, 1);
+        // check if the GC is running and wait for it to finish
+        jl_gc_safepoint_(ptls);
+    }
+    JL_SIGATOMIC_END();
+    return prev;
+}
+
+JL_DLLEXPORT void jl_gc_enable_from_nonmutator(int on)
+{
+    if (on)
+        jl_atomic_fetch_add(&jl_gc_disable_counter, -1);
+    else {
+        jl_atomic_fetch_add(&jl_gc_disable_counter, 1);
+        // pass NULL as a special token to indicate we are running on an unmanaged task
+        jl_safepoint_wait_gc(NULL);
+    }
+}
+
+JL_DLLEXPORT int jl_gc_is_globally_enabled(void)
+{
+    return !jl_atomic_load_acquire(&jl_gc_disable_counter);
 }
 
 JL_DLLEXPORT void jl_gc_collect(jl_gc_collection_t collection)

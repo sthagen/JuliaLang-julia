@@ -22,11 +22,13 @@ extern "C" {
     XX(_structtype,"_structtype") \
     XX(_svec_len,"_svec_len") \
     XX(_svec_ref,"_svec_ref") \
+    XX(_task,"_task") \
     XX(_typebody,"_typebody!") \
     XX(_typevar,"_typevar") \
     XX(_using, "_using") \
     XX(applicable,"applicable") \
     XX(apply_type,"apply_type") \
+    XX(cancellation_point,"cancellation_point!") \
     XX(compilerbarrier,"compilerbarrier") \
     XX(current_scope,"current_scope") \
     XX(donotdelete,"donotdelete") \
@@ -36,6 +38,7 @@ extern "C" {
     XX(getfield,"getfield") \
     XX(getglobal,"getglobal") \
     XX(declare_global,"declare_global") \
+    XX(define_method,"define_method") \
     XX(ifelse,"ifelse") \
     XX(intrinsic_call,"intrinsic_call") \
     XX(invoke,"invoke") \
@@ -73,6 +76,7 @@ extern "C" {
     XX(svec,"svec") \
     XX(swapfield,"swapfield!") \
     XX(swapglobal,"swapglobal!") \
+    XX(task_result_type,"task_result_type") \
     XX(throw,"throw") \
     XX(throw_methoderror,"throw_methoderror") \
     XX(tuple,"tuple") \
