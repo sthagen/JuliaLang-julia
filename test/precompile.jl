@@ -697,7 +697,9 @@ precompile_test_harness(false) do dir
           error("break me")
           end
           """)
-    @test_throws Base.Precompilation.PkgPrecompileError Base.require(Main, :FooBar2)
+    redirect_stderr(devnull) do
+        @test_throws Base.Precompilation.PkgPrecompileError Base.require(Main, :FooBar2)
+    end
 
     # Test that trying to eval into closed modules during precompilation is an error
     FooBar3_file = joinpath(dir, "FooBar3.jl")
@@ -711,7 +713,9 @@ precompile_test_harness(false) do dir
         $code
         end
         """)
-        @test_throws Base.Precompilation.PkgPrecompileError Base.require(Main, :FooBar3)
+        redirect_stderr(devnull) do
+            @test_throws Base.Precompilation.PkgPrecompileError Base.require(Main, :FooBar3)
+        end
     end
 
     # Declaring an already-existing generic function of a closed module is a
@@ -1192,6 +1196,38 @@ precompile_test_harness("precompiletools") do dir
             success += sig.parameters[3] === Vector{M.MyType}
         end
         @test success == 1
+    end
+end
+
+precompile_test_harness("dispatch edge") do dir
+    KindDispatch = :KindDispatch_0x5e0bd2a4c1f7
+    write(joinpath(dir, "$KindDispatch.jl"),
+        """
+        module $KindDispatch
+            # Inference through a kind (`Type{T}`) reaches calls that match several
+            # methods, and no cached source is available for them, so the optimizer has to
+            # synthesize the call target. The dispatch edge recorded for it must not claim
+            # that the target's signature has a single fully-covering match: nothing about
+            # dispatch changes between precompiling this and loading it, so `f` must stay
+            # valid.
+            f(v::Vector{Any}) = Base.aligned_sizeof(v[1]::Type{<:Real})
+            precompile(f, (Vector{Any},))
+        end
+        """
+    )
+    pkgid = Base.PkgId(string(KindDispatch))
+    Base.compilecache(pkgid)
+    @eval using $KindDispatch
+    M = invokelatest(getglobal, @__MODULE__, KindDispatch)
+    invokelatest() do
+        world = Base.get_world_counter()
+        mi = only(Base.specializations(only(methods(M.f))))
+        @test mi.specTypes === Tuple{typeof(M.f), Vector{Any}}
+        ci = mi.cache
+        while ci.max_world < world && isdefined(ci, :next)
+            ci = ci.next
+        end
+        @test ci.max_world == typemax(UInt)
     end
 end
 
@@ -3699,6 +3735,130 @@ precompile_test_harness("cancellation relink under cancelled external parent") d
         @test Base.iscancelled(CancelExtB.B_MID)
         @test Base.iscancelled(CancelExtB.B_CHILD)
         @test Base.iscancelled(CancelExtB.B_GRAND)
+    end
+end
+
+precompile_test_harness("Ambiguity-pruned dispatch edge revalidation") do load_path
+    # A method added after an image is built can be pairwise-ambiguous with a recorded
+    # dispatch match without changing the count returned by the include_ambiguous=false
+    # lookup used at load time: the newcomer is pruned from the result when the expected
+    # match fully covers its overlap with the call signature. Such a package image must
+    # NOT be revalidated, because dispatch in the newly-ambiguous region throws MethodError.
+    write(joinpath(load_path, "AmbigPruneA.jl"),
+        """
+        module AmbigPruneA
+        m(x::Integer, y) = 1
+        end
+        """)
+    write(joinpath(load_path, "AmbigPruneB.jl"),
+        """
+        module AmbigPruneB
+        using AmbigPruneA
+        caller(x::Int8, @nospecialize(y)) = AmbigPruneA.m(x, y)
+        precompile(caller, (Int8, Any))
+        end
+        """)
+    # Precompile B (which pulls in A) without loading either into this session.
+    Base.compilecache(Base.PkgId("AmbigPruneB"))
+
+    @eval using AmbigPruneA
+    # Introduce a method pairwise-ambiguous with m(::Integer, ::Any): the first slot is
+    # wider, the second narrower, and the overlap (Integer, AbstractString) is non-empty.
+    @eval AmbigPruneA.m(x, y::AbstractString) = 2
+    # Loading B now verifies its image in a world that already contains the ambiguity.
+    @eval using AmbigPruneB
+
+    # The precompiled CodeInstance for the (Int8, Any) specialization must have been
+    # invalidated (max_world != typemax) by load-time revalidation. This check must be
+    # evaluated separately from (and before) any code containing a call to `caller`:
+    # compiling such code adds a fresh, valid CodeInstance for the same specialization
+    # (@nospecialize routes the concrete call's compile signature there).
+    @eval let
+        m = only(methods(AmbigPruneB.caller))
+        target = Tuple{typeof(AmbigPruneB.caller), Int8, Any}
+        mi = nothing
+        for spec in Base.specializations(m)
+            if spec.specTypes == target
+                mi = spec
+                break
+            end
+        end
+        @test mi !== nothing
+        ci = isdefined(mi, :cache) ? mi.cache : nothing
+        revalidated = false
+        while ci !== nothing
+            if ci.max_world == typemax(UInt)
+                revalidated = true
+                break
+            end
+            ci = isdefined(ci, :next) ? ci.next : nothing
+        end
+        @test !revalidated
+    end
+    # Dispatch in the ambiguous region must now throw rather than return the stale result.
+    @eval @test_throws MethodError AmbigPruneB.caller(Int8(1), "hi")
+end
+
+precompile_test_harness("pkgimage type cache dedup") do dir
+    # Check deduplication when a type precedes its supertype in the image.
+    # The unused IFD binding preserves that order.
+    write(joinpath(dir, "DedupColors.jl"),
+          """
+          module DedupColors
+              export CAbstractGray, CGray
+              abstract type CAbstractGray{T} end
+              struct CGray{T} <: CAbstractGray{T}
+                  val::T
+              end
+              Base.adjoint(c::CAbstractGray) = c
+          end
+          """)
+    write(joinpath(dir, "DedupTrigger.jl"),
+          """
+          module DedupTrigger
+              using DedupColors
+
+              const IFD = Dict{UInt16, Any}
+
+              function readdata!(target::AbstractArray)
+                  fill!(reinterpret(UInt8, view(target, 1:length(target))), 0x00)
+              end
+
+              function load()
+                  ifd = IFD()
+                  ifd[0x0106] = UInt16(1)
+                  type = Int(ifd[0x0106]) == 2 ? Ref : CGray
+                  pixeltype = type{UInt8}
+                  cache = Array{pixeltype}(undef, 2, 2)
+                  readdata!(cache)
+                  Matrix(cache')
+              end
+
+              load()
+          end
+          """)
+    Base.compilecache(Base.PkgId("DedupColors"))
+    Base.compilecache(Base.PkgId("DedupTrigger"))
+    @eval using DedupColors
+    M = invokelatest() do
+        Memory{DedupColors.CGray{UInt8}}
+    end
+    @eval using DedupTrigger
+    invokelatest() do
+        CGrayU8 = DedupColors.CGray{UInt8}
+        for T in (Memory{CGrayU8}, DenseVector{CGrayU8})
+            tn = T.name
+            n = 0
+            for t in tn.cache
+                if t isa DataType && t.name === tn &&
+                        length(t.parameters) == length(T.parameters) &&
+                        all(i -> t.parameters[i] === T.parameters[i], eachindex(T.parameters))
+                    n += 1
+                end
+            end
+            @test n == 1
+        end
+        @test M === Memory{DedupColors.CGray{UInt8}}
     end
 end
 

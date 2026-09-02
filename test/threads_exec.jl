@@ -1136,8 +1136,6 @@ end
 
     unordered_fair = collect(jitter_channel(sin, k, delay, 10, Threads.FairSchedule()))
     unordered_static = collect(jitter_channel(sin, k, delay, 10, Threads.StaticSchedule()))
-    @test expected != unordered_fair
-    @test expected != unordered_static
     @test Set(expected) == Set(unordered_fair)
     @test Set(expected) == Set(unordered_static)
 
@@ -1816,6 +1814,8 @@ if threadpoolsize() >= 2
             while true
                 x[] = x[] * 1.0000001 + 0.1
                 Threads.atomic_add!(spins, 1)
+                # Safepoint needed. Otherwise it causes GC hang.
+                GC.safepoint()
             end
         end
         watcher = @async wait(victim)

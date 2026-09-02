@@ -369,9 +369,8 @@ static void jl_send_reset_signal(int16_t tid, int reset_code) JL_NOTSAFEPOINT
     // Re-check now that the thread cannot run (the current task may have
     // switched before the freeze). Delivery is gated on an actual
     // cancellation of the task's bound token source - coherent with the
-    // published regions, since everything that may rebind it while a region
-    // is live (exception handlers, the finalizer bracket) restores the pair
-    // together.
+    // published regions: exception handlers restore the pair together, and
+    // finalizers only run with the region unpublished.
     ct2 = jl_atomic_load_relaxed(&ptls2->current_task);
     if (ct2 == NULL)
         goto resume;
@@ -520,11 +519,6 @@ static BOOL WINAPI sigint_handler(DWORD wsig) //This needs winapi types to guara
         default: sig = SIGTERM; break;
     }
     if (!jl_ignore_sigint()) {
-        // Before initialization has completed, the orderly teardown
-        // (jl_atexit_hook) is unsafe against the half-restored runtime and
-        // there are no Julia atexit hooks to honor - exit abruptly.
-        if (sig != SIGINT && !jl_atomic_load_acquire(&jl_initialization_complete))
-            _exit(128 + sig);
         if (exit_on_sigint)
             jl_exit(128 + sig); // 128 + SIGINT
         if (sig == SIGINT) {

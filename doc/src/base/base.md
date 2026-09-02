@@ -156,6 +156,7 @@ Base.finalizer
 Base.finalize
 Base.copy
 Base.deepcopy
+Base.deepcopy_impl
 Base.getproperty
 Base.setproperty!
 Base.replaceproperty!
@@ -294,6 +295,7 @@ Base.:(|>)
 Base.:(∘)
 Base.ComposedFunction
 Base.splat
+Base.unsplat
 Base.Fix
 Base.Fix1
 Base.Fix2

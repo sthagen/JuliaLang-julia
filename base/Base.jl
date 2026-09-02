@@ -182,7 +182,7 @@ include("channels.jl")
 include("partr.jl")
 include("task.jl")
 include("threads_overloads.jl")
-include("weakkeydict.jl")
+include("weakdict.jl")
 
 # ScopedValues
 include("scopedvalues.jl")
@@ -248,7 +248,7 @@ using .Sort
 include("fastmath.jl")
 using .FastMath
 
-function deepcopy_internal end
+function deepcopy_impl end
 
 # enums
 include("Enums.jl")

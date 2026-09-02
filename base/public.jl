@@ -36,6 +36,7 @@ public
     require_one_based_indexing,
     memoryindex,
     unsetindex!,
+    unsetindex_atomic!,
 
 # collections
     IteratorEltype,
@@ -148,4 +149,5 @@ public
     text_colors,
     depwarn,
     blackbox,
-    donotdelete
+    donotdelete,
+    deepcopy_impl

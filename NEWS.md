@@ -85,11 +85,24 @@ Compiler/Runtime improvements
   the LLVM threads each spawns to compile its native image, sharing a single thread budget so idle cores are
   filled during the long tail without oversubscribing the machine when many packages compile at once. The total
   budget can be set with the new `JULIA_PRECOMPILE_THREADS` environment variable ([#61958]).
+* Coverage reports now include code executed by the interpreter, such as top-level statements and method
+  bodies run with `--compile=min`. Consequently, LCOV output and `.cov` files may contain source lines that
+  were absent in earlier releases ([#62514]).
+* Coverage and allocation tracking no longer update counters atomically. This reduces the overhead of
+  instrumented code, but counter values may be inaccurate when the same source line runs concurrently on
+  multiple threads ([#62514]).
+* `--code-coverage=user` no longer includes inlined Base methods whose module cannot be recovered from debug
+  information. This prevents coverage from writing `.cov` files for Base sources into the Julia installation
+  ([#62514]).
 
 Command-line option changes
 ---------------------------
 
 * `-P <project>` is now a shorthand for `--project <project>` ([#59867]).
+* `--code-coverage=@<path>` and `--track-allocation=@<path>` now restrict tracking to the specified file or
+  directory tree. For example, `@/src/Foo` tracks `/src/Foo/x.jl`, but not `/src/Foobar/x.jl`. Specifying the
+  filesystem root as `@/` tracks every absolute path. `Base.is_file_tracked` now returns `false` when Julia was
+  not started with either `@<path>` option ([#62514]).
 
 Multi-threading changes
 -----------------------
@@ -125,6 +138,8 @@ New library functions
 ---------------------
 
 * `tap(f)` creates a function that calls `f(x)` for side effects and returns `x` ([#61340]).
+* `unsplat(f)` creates a function that bundles its arguments into a tuple and passes them to `f`;
+  it is the inverse of `splat` ([#62714]).
 * `Base.set_binding_visibility!` sets the declared visibility (`:none`, `:public`, or `:export`) of a name
   in a module, allowing an `export` or `public` declaration to be retracted programmatically ([#62131]).
 * `Base.generating_output()` has been made `public` (but not exported) to allow checking whether the current
@@ -165,6 +180,8 @@ New library features
 * When the display height is too small to show any array entries, the `text/plain` array display
   (used e.g. by the REPL and when logging values with `@info` etc.) now shows as many entries as
   fit on a single line, truncated to the display width, instead of showing no data at all ([#62543]).
+* The element type of broadcast expressions now uses regular inference machinery rather than an idiosyncratic
+  heuristic. This can help fused or empty broadcasts infer to more precise element types ([#62564]).
 
 Standard library changes
 ------------------------
@@ -212,6 +229,16 @@ Standard library changes
 * New functions `detect_closure_boxes` and `detect_closure_boxes_all` find methods that allocate `Core.Box`
   in their lowered code, which can indicate performance issues from captured variables in closures ([#60478]).
 
+* `detect_unbound_args` now uses a conservative rule derived from how subtyping assigns values
+  to static parameters, instead of older heuristics. It detects previously missed
+  possibly-unbound parameters (such as `f(::Type{<:T}) where {T}`, which leaves `T`
+  unbound when called with `Union{}`, or `f(::Vector{<:T}) where {T}` with a
+  `Vector{Union{}}` argument), and no longer reports methods whose problematic calls are
+  all shadowed by more specific methods (such as a `f(::Type{Union{}})` fallback), or
+  whose lowered bodies never read the possibly-unbound parameters. Parameters left
+  unbound only by calls with `Union{}` type parameters are reported only with the new
+  `ambiguous_bottom=true` keyword argument, as for `detect_ambiguities` ([#62405]).
+
 #### Dates
 
 * `unix2datetime` now accepts a keyword argument `localtime=true` to use the host system's local time zone instead of UTC ([#50296]).
@@ -223,6 +250,13 @@ Standard library changes
   the given arguments, e.g. `@methods isvalid('a', 1)` or `@methods isvalid(::AbstractChar, ::Integer)` ([#62311]).
 
 #### Dates
+
+#### TOML
+
+* The parsing functions (`TOML.parsefile`, `TOML.parse`, and their `try` variants) can now capture
+  the comments of a document into a `TOML.Comments` object via the new `comments` keyword argument,
+  and `TOML.print` can write them back out via its new `comments` keyword argument. This allows
+  modifying a TOML file without losing its comments ([#62672]).
 
 External dependencies
 ---------------------
