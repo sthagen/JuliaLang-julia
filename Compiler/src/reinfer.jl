@@ -131,6 +131,11 @@ function needs_instrumentation(codeinst::CodeInstance, mi::MethodInstance, def::
         if isdefined(def, :debuginfo) ? # generated_only functions do not have debuginfo, so fall back to considering their codeinst debuginfo though this may be slower and less reliable
             should_instrument(def.module, def.debuginfo) :
             isdefined(codeinst, :debuginfo) && should_instrument(def.module, codeinst.debuginfo)
+            # Compatible image code already has the requested counters.
+            # Allocation tracking still needs fresh instrumentation.
+            if JLOptions().malloc_log == 0 && ccall(:jl_codeinst_coverage_compatible, Cint, (Any,), codeinst) != 0
+                return false
+            end
             return true
         end
         gensig = gen_staged_sig(def, mi)
@@ -595,11 +600,6 @@ function verify_call(@nospecialize(sig), expecteds::Core.SimpleVector, i::Int, n
         empty!(matches)
         maxworld[] = 0
     else
-        # FIXME: the edge format does not encode whether or not this ambiguity was accounted
-        # for in inference / optimizer / etc. so we are forced to invalidate conservatively.
-        if has_ambig[] != 0
-            maxworld[] = 0
-        end
         # setdiff!(result, expected)
         if length(result) ≠ n
             maxworld[] = 0
