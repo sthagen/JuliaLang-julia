@@ -173,12 +173,12 @@ JL_DLLEXPORT jl_value_t *jl_eval_string(const char *str)
 {
     jl_value_t *r;
     jl_task_t *ct = jl_current_task;
+    jl_value_t *ast = NULL;
     JL_TRY {
-        const char filename[] = "none";
-        jl_value_t *ast = jl_parse_all(str, strlen(str),
-                filename, strlen(filename), 1);
-        JL_GC_PUSH1(&ast);
-        r = jl_toplevel_eval_in(jl_main_module, ast);
+        jl_value_t *fname = jl_cstr_to_string("none");
+        JL_GC_PUSH2(&fname, &ast);
+        ast = jl_parse(str, strlen(str), fname, jl_main_module);
+        r = jl_toplevel_eval_in(jl_main_module, jl_svecref(ast, 0));
         JL_GC_POP();
         _jl_exception_clear(ct);
     }
@@ -1110,9 +1110,10 @@ JL_DLLEXPORT int jl_repl_entrypoint(int argc, char *argv[]) JL_CANSAFEPOINT_ENTE
         while (!TracyCIsConnected) jl_cpu_pause(); // Wait for connection
 #endif
 
-    // no-op on Windows, note that the caller must have already converted
-    // from `wchar_t` to `UTF-8` already if we're running on Windows.
-    uv_setup_args(argc, argv);
+    // Use libuv's copy: setting the process title can overwrite the original
+    // argv storage, including option strings such as the coverage output path.
+    // On Windows the caller must already have converted argv to UTF-8.
+    argv = uv_setup_args(argc, argv);
 
     // No-op on non-windows
     lock_low32();

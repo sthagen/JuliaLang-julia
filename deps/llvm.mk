@@ -206,6 +206,11 @@ LLVM_CMAKE += -DCMAKE_C_FLAGS="$(LLVM_CPPFLAGS) $(LLVM_CFLAGS)" \
 ifeq ($(OS),Darwin)
 # Explicitly use the default for -mmacosx-version-min=10.9 and later
 LLVM_CMAKE += -DLLVM_ENABLE_LIBCXX=ON
+# LLVM archives its static libraries with Xcode's libtool, which cannot index
+# LTO bitcode from a different LLVM; allow using e.g. llvm-libtool-darwin.
+ifneq ($(LLVM_LIBTOOL),)
+LLVM_CMAKE += -DCMAKE_LIBTOOL="$(LLVM_LIBTOOL)"
+endif
 endif
 
 ifeq ($(BUILD_LLVM_CLANG),0)
@@ -322,8 +327,9 @@ endif
 ifeq ($(OS),Darwin)
 ifneq ($(BUILD_LLVM_CLANG), 1)
 # The LLVM runtimes build of compiler-rt requires clang, so build the builtins
-# standalone with the host compiler instead. Only the host architecture is built:
-# building several arm64 variants in parallel races on the generated outline atomics.
+# standalone with the host compiler instead. Only the host architecture is built,
+# and not the kernel extension variant, which Julia does not use: building several
+# arm64 variants in parallel races on the generated outline atomics.
 LLVM_COMPILERRT_BUILDDIR := $(LLVM_BUILDDIR)/build_compiler-rt
 ifeq ($(ARCH),aarch64)
 LLVM_COMPILERRT_ARCH := arm64
@@ -339,7 +345,7 @@ $(LLVM_COMPILERRT_BUILDDIR)/build-configured: $(SRCCACHE)/$(LLVM_SRC_DIR)/source
 			-DCMAKE_OSX_DEPLOYMENT_TARGET=$(MACOSX_VERSION_MIN) \
 			-DCOMPILER_RT_ENABLE_IOS=OFF -DCOMPILER_RT_ENABLE_WATCHOS=OFF \
 			-DCOMPILER_RT_ENABLE_TVOS=OFF -DCOMPILER_RT_ENABLE_XROS=OFF \
-			-DDARWIN_osx_BUILTIN_ARCHS=$(LLVM_COMPILERRT_ARCH)
+			-DDARWIN_osx_BUILTIN_ARCHS=$(LLVM_COMPILERRT_ARCH) -DDARWIN_osx_SKIP_CC_KEXT=ON
 	echo 1 > $@
 
 $(LLVM_COMPILERRT_BUILDDIR)/build-compiled: $(LLVM_COMPILERRT_BUILDDIR)/build-configured
@@ -353,16 +359,25 @@ $(LLVM_BUILDDIR_withtype)/build-compiled: $(LLVM_COMPILERRT_BUILDDIR)/build-comp
 endif
 endif
 
+# CMake runs on the build host, even when targeting Windows from Unix.
+# MSYS2 excludes CMAKE_INSTALL_PREFIX from conversion; LLVM's prefix is absolute.
+ifeq ($(BUILD_OS),WINNT)
+LLVM_INSTALL_PREFIX = $(call cygpath_w,$1)
+else
+LLVM_INSTALL_PREFIX = $1
+endif
+
 LLVM_INSTALL = \
 	cd $1 && mkdir -p $2$$(build_depsbindir)/lit && \
 	cp $$(SRCCACHE)/$$(LLVM_SRC_DIR)/llvm/utils/lit/*.py $2$$(build_depsbindir)/lit/ && \
 	cp $$(SRCCACHE)/$$(LLVM_SRC_DIR)/llvm/utils/lit/*.toml $2$$(build_depsbindir)/lit/ && \
 	cp -r $$(SRCCACHE)/$$(LLVM_SRC_DIR)/llvm/utils/lit/lit $2$$(build_depsbindir)/lit/ && \
-	$$(CMAKE) -DCMAKE_INSTALL_PREFIX="$2$$(build_prefix)" -P cmake_install.cmake
+	$$(CMAKE) -DCMAKE_INSTALL_PREFIX="$$(call LLVM_INSTALL_PREFIX,$2$$(build_prefix))" -P cmake_install.cmake
 ifeq ($(OS), WINNT)
 # CMAKE_INSTALL_BINDIR puts the DLL in build_depsbindir alongside the tools,
-# but Julia loads it out of build_shlibdir, so it has to be in both places
-LLVM_INSTALL += && cp $2$$(build_depsbindir)/$(LLVM_SHARED_LIB_NAME).dll $2$$(build_shlibdir)
+# but Julia loads it out of build_shlibdir, so it has to be in both places.
+# Staged installs have no directory there yet, and cp would make the DLL one.
+LLVM_INSTALL += && mkdir -p $2$$(build_shlibdir) && cp $2$$(build_depsbindir)/$(LLVM_SHARED_LIB_NAME).dll $2$$(build_shlibdir)
 endif
 ifeq ($(OS),Darwin)
 # https://github.com/JuliaLang/julia/issues/29981
