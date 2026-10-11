@@ -81,6 +81,17 @@ mktempdir() do dir
             @test Base.isfile_casesensitive(true_filename)
             @test !Base.isfile_casesensitive(lowered_filename)
 
+            # check that case-sensitivity is preserved for relative paths with ghost directories.
+            # Windows resolves `..` before looking at the disk, so there the file exists; elsewhere it does not.
+            ghost_path = joinpath("nonexistent", "..", true_filename)
+            @test Base.isfile_casesensitive(ghost_path) == isfile(ghost_path) == Sys.iswindows()
+            @test !Base.isfile_casesensitive(joinpath("nonexistent", "..", lowered_filename))
+
+            # check that case-sensitivity is preserved for relative paths with real directories:
+            mkdir("realdir")
+            @test Base.isfile_casesensitive(joinpath("realdir", "..", true_filename))
+            @test !Base.isfile_casesensitive(joinpath("realdir", "..", lowered_filename))
+
             # check that case-sensitivity only applies to basename of a path:
             if isfile(lowered_filename) # case-insensitive filesystem
                 mkdir("cAsEtEsT")
@@ -364,6 +375,20 @@ module NotPkgModule; end
         @test pkgdir(Foo.SubFoo1, "src") == normpath(abspath(@__DIR__, "project/deps/Foo1/src"))
         @test pkgdir(Foo.SubFoo2, "src") == normpath(abspath(@__DIR__, "project/deps/Foo1/src"))
         @test pkgdir(NotPkgModule, "src") === nothing
+    end
+
+    @testset "pkgdir of a bare module file" begin
+        mktempdir() do dir
+            write(joinpath(dir, "BareModFile.jl"), "__precompile__(false); module BareModFile end")
+            pushfirst!(LOAD_PATH, dir)
+            try
+                m = Base.require(Base.PkgId("BareModFile"))
+                @test pkgdir(m) === nothing
+                @test pkgversion(m) === nothing
+            finally
+                popfirst!(LOAD_PATH)
+            end
+        end
     end
 
     @testset "pkgversion" begin
@@ -1466,6 +1491,7 @@ end
                     nENV["JULIA_LOAD_PATH"] = join([proj, "@stdlib"], sep) # the REPL must be loadable
                     nENV["JULIA_DEPOT_PATH"] = depot * sep # trailing separator appends the default depots
                     nENV["TERM"] = "dumb"
+                    nENV["CI"] = "true" # plain precompile progress: one line per package, no redraws
                     Main.FakePTYs.with_fake_pty() do pts, ptm
                         # `--compiled-modules=yes` so an inherited `=no` cannot skip the look-ahead
                         p = run(detach(setenv(`$(Base.julia_cmd()) --startup-file=no --color=no --compiled-modules=yes -q`, nENV)), pts, pts, pts, wait=false)
@@ -1499,19 +1525,12 @@ end
                 check_exts,
             ))
             @test occursin("lookahead ok", output)
-            precompiling = filter(l -> occursin("Info: Precompiling", l), split(output, '\n'))
-            # once for `using ExtDep2`, once for everything `using HasExtensions, ExtDep` loads,
-            # each a single parallel session
-            @test length(precompiling) == 2
+            # one session for `using ExtDep2`, one for everything `using HasExtensions, ExtDep`
+            # loads, extensions included (serially compiled extensions would show no session)
             @test count("successfully precompiled", output) == 2
-            if length(precompiling) == 2
-                # names are unique in this environment, so no uuids are shown
-                @test endswith(strip(precompiling[1]), "Precompiling ExtDep2")
-                @test !occursin("]", precompiling[2])
-                for name in ("HasExtensions", "ExtDep", "HasExtensions → Extension",
-                             "HasExtensions → ExtensionDep", "HasExtensions → ExtensionFolder")
-                    @test occursin(name, precompiling[2])
-                end
+            for name in ("✓ ExtDep2", "✓ HasExtensions", "✓ ExtDep", "✓ HasExtensions → Extension",
+                         "✓ HasExtensions → ExtensionDep", "✓ HasExtensions → ExtensionFolder")
+                @test occursin(name, output)
             end
 
             # the parent is already loaded: its extensions are batched with the triggers being loaded
@@ -1523,15 +1542,10 @@ end
                 check_exts,
             ))
             @test occursin("lookahead ok", output)
-            precompiling = filter(l -> occursin("Info: Precompiling", l), split(output, '\n'))
-            @test length(precompiling) == 2
             @test count("successfully precompiled", output) == 2
-            if length(precompiling) == 2
-                @test occursin("Precompiling HasExtensions", precompiling[1])
-                @test !occursin("]", precompiling[2])
-                for name in ("ExtDep", "ExtDep2", "HasExtensions → Extension", "HasExtensions → ExtensionFolder")
-                    @test occursin(name, precompiling[2])
-                end
+            for name in ("✓ HasExtensions", "✓ ExtDep", "✓ ExtDep2", "✓ HasExtensions → Extension",
+                         "✓ HasExtensions → ExtensionFolder")
+                @test occursin(name, output)
             end
         end
 
